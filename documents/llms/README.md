@@ -20,6 +20,7 @@ Read [`../../STATUS.md`](../../STATUS.md) for durable project position and only 
 - Existing code establishes behavior, not automatic scientific authority.
 - Reconstruct the proposed mechanism before replacing it with a nearby familiar one.
 - Answer the current question before expanding into later experiments or production design.
+- Procedures normally specify required outcomes, authority, and ownership. Do not reimplement framework functionality merely because a procedure describes one possible transaction pattern. Reuse prebuilt logic when it demonstrably satisfies the governing contract.
 
 ## Broad authority
 
