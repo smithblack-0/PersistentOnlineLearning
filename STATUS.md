@@ -1,6 +1,6 @@
 # Status
 
-The repository is in preliminary research and design. There is no implementation yet, and the architecture and generator should still be treated as hypotheses rather than commitments.
+The repository is in preliminary research and design. There is no accepted implementation yet, and the architecture and generator should still be treated as hypotheses rather than commitments.
 
 ## Current objective
 
@@ -18,6 +18,13 @@ The model should be able to infer common rules from very long experience, preser
 ## Important distinction
 
 Acquiring an unseen natural language after exposure to a corpus is an eventual high-value test. It is not the objective of the project. The objective is persistent online learning itself.
+
+## Documentation authority
+
+- [`documents/preliminary/`](documents/preliminary/) contains exploratory notes and unresolved design work.
+- [`documents/procedures/`](documents/procedures/) contains general research, engineering, writing, and lifecycle procedures.
+- [`documents/llms/`](documents/llms/) contains concise LLM-specific routing and recurring failure warnings.
+- [`documents/usage/`](documents/usage/) is reserved for human-facing instructions for working systems.
 
 ## Not yet settled
 
