@@ -1,38 +1,46 @@
-# Checkpoint procedure
+# Checkpoint lifecycle contract
 
-## Authority model
+## Purpose and ownership
 
-The newest valid completed local checkpoint is authoritative during a running session. Hugging Face Storage Buckets provide durable backing storage through explicit save-boundary upload and load-boundary download synchronization.
+The checkpoint subsystem owns the transition from speculative runtime state to durable recoverable state. It may delegate serialization, local atomic-save behavior, retention, or lifecycle hooks to PyTorch, Hugging Face, Lightning, or another framework when the delegated mechanism satisfies this contract.
 
-No model, optimizer, generator, telemetry, or experiment state becomes durable between checkpoint saves. Console output is informational and cannot be used to reconstruct authoritative state.
+The bucket adapter owns only remote synchronization. It does not decide which runtime state is authoritative, construct scientific payloads, or repair checkpoints.
 
-## Save transaction
+The newest valid completed local checkpoint is authoritative during a running session. Hugging Face Storage Buckets provide durable backing storage through upload synchronization at the save boundary and download synchronization at the load boundary.
 
-1. Write the complete checkpoint into a temporary directory on the same filesystem as the final checkpoint root.
-2. Write model, optimizer, generator, trainer, experiment configuration, and buffered telemetry state.
-3. Generate a manifest containing byte sizes and checksums.
-4. Write `COMPLETED` last inside the temporary directory.
-5. Flush the files and directory where the platform permits it.
-6. Atomically rename the temporary directory to its immutable `checkpoint-XXXXXXXX` name.
-7. Atomically update the local `LATEST` pointer.
-8. Synchronize the completed local checkpoint to the configured bucket in upload mode.
-9. Synchronize the remote `LATEST` pointer only after the checkpoint upload succeeds.
-10. Prune excess local checkpoints only after the remote upload boundary.
+No model, optimizer, generator, telemetry, or experiment state becomes durable between checkpoint saves. Console output is informational and cannot reconstruct authoritative state.
 
-An interrupted local save leaves only a temporary directory, which loaders ignore. An interrupted upload leaves the previous completed remote checkpoint authoritative.
+## Required save behavior
 
-## Load transaction
+A save implementation must provide these outcomes:
 
-1. If bucket synchronization is configured, synchronize remote checkpoint metadata in download mode at the load boundary.
-2. Consider candidates from newest to oldest.
-3. Download a missing candidate into a temporary local directory.
-4. Validate `COMPLETED`, manifest structure, required files, sizes, and checksums.
-5. Atomically move the valid directory into the local checkpoint root.
-6. Load the newest valid local checkpoint.
-7. If remote synchronization fails, use an already valid local checkpoint when one exists.
+1. The committed payload contains every state required for scientific continuation, including model, optimizer, generator, trainer, experiment configuration, and buffered telemetry state when applicable.
+2. A crash before local publication cannot expose a partially written checkpoint as valid.
+3. Once published, a checkpoint is immutable or otherwise protected from in-place partial replacement.
+4. Remote upload begins only after the local checkpoint has committed successfully.
+5. An interrupted upload cannot supersede the previous completed remote checkpoint.
+6. A convenience pointer such as `LATEST` cannot become authoritative before its target is complete and valid.
+7. Retention or pruning cannot remove the previous recoverable checkpoint before the new checkpoint has crossed the required durability boundary.
 
-The loader never trusts `LATEST` without validating the referenced checkpoint. A corrupt or incomplete newest checkpoint falls back to the previous valid checkpoint rather than being repaired in place.
+A framework's pre-save, post-save, or checkpoint callbacks may own these behaviors directly. Custom save machinery is unnecessary when existing logic establishes the same guarantees.
+
+## Required load behavior
+
+A load implementation must provide these outcomes:
+
+1. When remote backing is configured, download synchronization occurs at the load boundary before remote candidates are selected.
+2. The loader chooses the newest valid completed checkpoint, not merely the path named by `LATEST`.
+3. An incomplete or corrupt newest candidate falls back to the previous valid checkpoint.
+4. A remote synchronization failure does not block use of an already valid local checkpoint.
+5. Checkpoints are validated before their state becomes authoritative and are never repaired speculatively in place.
+6. Configuration compatibility is judged by the scientific and continuation invariants that must match, not by incidental runtime settings such as local paths or compilation preferences.
+
+## Reference transaction pattern
+
+One acceptable implementation writes into a same-filesystem temporary directory, records a manifest and completion marker, atomically renames the directory into an immutable checkpoint name, updates a local pointer, and then synchronizes that completed directory to the bucket. Loading performs the inverse synchronization into temporary local storage, validates it, and atomically publishes it locally.
+
+This pattern is illustrative rather than mandatory. A prebuilt checkpoint manager may use a different internal protocol when it demonstrably provides the required behavior above.
 
 ## Credentials
 
-Credentials are runtime dependencies. They must not appear in dataclass fields, JSON configuration, checkpoint payloads, telemetry, manifests, source files, or environment snapshots. The runtime reads the Hugging Face token only when constructing the bucket adapter and never serializes the adapter itself.
+Credentials are external runtime dependencies. They must not appear in dataclass fields, JSON configuration, checkpoint payloads, telemetry, manifests, source files, or environment snapshots. The runtime supplies the Hugging Face token only to the bucket adapter or underlying client and never serializes that authenticated object.
