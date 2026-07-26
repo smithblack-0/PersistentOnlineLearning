@@ -1,0 +1,22 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "persistent-online-learning"
+version = "0.1.0.dev0"
+description = "Research infrastructure for persistent online learning with recurrent state."
+requires-python = ">=3.11"
+dependencies = [
+  "torch>=2.5",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra"
