@@ -8,7 +8,9 @@ version = "0.1.0.dev0"
 description = "Research infrastructure for persistent online learning with recurrent state."
 requires-python = ">=3.11"
 dependencies = [
-  "torch>=2.5",
+  "torch>=2.7",
+  "transformers>=4.45",
+  "flash-linear-attention[cuda]==0.5.1",
 ]
 
 [project.optional-dependencies]
@@ -20,3 +22,6 @@ where = ["src"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-ra"
+markers = [
+  "cuda: requires a CUDA device and the FLA CUDA kernels",
+]
