@@ -8,67 +8,37 @@ grammars so downstream code never has to recreate those invariants.
 
 from collections import deque
 from dataclasses import dataclass
-from typing import TypeAlias
+from typing import NamedTuple, TypeAlias
 
 
-def _require_index(name: str, value: int) -> None:
-    if type(value) is not int:
-        raise TypeError(f"{name} must use int")
-    if value < 0:
-        raise ValueError(f"{name} must be nonnegative")
-
-
-@dataclass(frozen=True, slots=True)
-class TerminalPairRule:
+class TerminalPairRule(NamedTuple):
     """Emit two terminal categories."""
 
     left_terminal: int
     right_terminal: int
 
-    def __post_init__(self) -> None:
-        _require_index("left terminal", self.left_terminal)
-        _require_index("right terminal", self.right_terminal)
 
-
-@dataclass(frozen=True, slots=True)
-class ParenthesisRule:
+class ParenthesisRule(NamedTuple):
     """Emit a terminal, expand one child, then emit another terminal."""
 
     left_terminal: int
     child: int
     right_terminal: int
 
-    def __post_init__(self) -> None:
-        _require_index("left terminal", self.left_terminal)
-        _require_index("child", self.child)
-        _require_index("right terminal", self.right_terminal)
 
-
-@dataclass(frozen=True, slots=True)
-class IterationRule:
+class IterationRule(NamedTuple):
     """Emit one terminal beside one child expansion."""
 
     terminal: int
     child: int
     terminal_first: bool
 
-    def __post_init__(self) -> None:
-        _require_index("terminal", self.terminal)
-        _require_index("child", self.child)
-        if type(self.terminal_first) is not bool:
-            raise TypeError("terminal_first must use bool")
 
-
-@dataclass(frozen=True, slots=True)
-class BranchRule:
+class BranchRule(NamedTuple):
     """Expand two child nonterminals in order."""
 
     left_child: int
     right_child: int
-
-    def __post_init__(self) -> None:
-        _require_index("left child", self.left_child)
-        _require_index("right child", self.right_child)
 
 
 Rule: TypeAlias = (
@@ -103,30 +73,23 @@ class Grammar:
         for index, alternatives in enumerate(self.nodes):
             if type(alternatives) is not tuple or not alternatives:
                 raise TypeError(f"node {index} alternatives must be a nonempty tuple")
-            if not all(
-                isinstance(
-                    rule,
-                    (
-                        TerminalPairRule,
-                        ParenthesisRule,
-                        IterationRule,
-                        BranchRule,
-                    ),
-                )
-                for rule in alternatives
-            ):
+            if not all(isinstance(rule, _RULE_TYPES) for rule in alternatives):
                 raise TypeError(f"node {index} contains an invalid rule")
             if len(set(alternatives)) != len(alternatives):
                 raise ValueError(f"node {index} contains duplicate alternatives")
 
             children: list[int] = []
             for rule in alternatives:
-                children.extend(_rule_children(rule))
-            invalid = [child for child in children if child >= len(self.nodes)]
-            if invalid:
-                raise ValueError(
-                    f"node {index} references child {invalid[0]} outside the grammar"
-                )
+                rule_children, terminals = _rule_parts(rule)
+                for terminal in terminals:
+                    _require_index("terminal category", terminal)
+                for child in rule_children:
+                    _require_index("child", child)
+                    if child >= len(self.nodes):
+                        raise ValueError(
+                            f"node {index} references child {child} outside the grammar"
+                        )
+                children.extend(rule_children)
             children_by_node.append(tuple(children))
 
         reachable = {self.root}
@@ -142,27 +105,27 @@ class Grammar:
             raise ValueError(f"node {missing} is unreachable from the root")
 
         unresolved_by_rule = [
-            [len(_rule_children(rule)) for rule in alternatives]
+            [len(_rule_parts(rule)[0]) for rule in alternatives]
             for alternatives in self.nodes
         ]
-        dependent_rules: list[list[tuple[int, int]]] = [[] for _ in self.nodes]
+        dependents: list[list[tuple[int, int]]] = [[] for _ in self.nodes]
         productive: set[int] = set()
         pending_productive: deque[int] = deque()
         for owner, alternatives in enumerate(self.nodes):
-            for alternative_index, rule in enumerate(alternatives):
-                children = _rule_children(rule)
+            for alternative, rule in enumerate(alternatives):
+                children, _ = _rule_parts(rule)
                 if not children and owner not in productive:
                     productive.add(owner)
                     pending_productive.append(owner)
                 for child in children:
-                    dependent_rules[child].append((owner, alternative_index))
+                    dependents[child].append((owner, alternative))
 
         while pending_productive:
             child = pending_productive.popleft()
-            for owner, alternative_index in dependent_rules[child]:
-                unresolved_by_rule[owner][alternative_index] -= 1
+            for owner, alternative in dependents[child]:
+                unresolved_by_rule[owner][alternative] -= 1
                 if (
-                    unresolved_by_rule[owner][alternative_index] == 0
+                    unresolved_by_rule[owner][alternative] == 0
                     and owner not in productive
                 ):
                     productive.add(owner)
@@ -185,7 +148,7 @@ class Grammar:
         return frozenset(
             child
             for rule in self.nodes[node]
-            for child in _rule_children(rule)
+            for child in _rule_parts(rule)[0]
         )
 
     @property
@@ -196,7 +159,7 @@ class Grammar:
             terminal
             for alternatives in self.nodes
             for rule in alternatives
-            for terminal in _rule_terminals(rule)
+            for terminal in _rule_parts(rule)[1]
         )
 
     @property
@@ -211,19 +174,23 @@ class Grammar:
             raise ValueError("node is outside the grammar")
 
 
-def _rule_children(rule: Rule) -> tuple[int, ...]:
-    if isinstance(rule, TerminalPairRule):
-        return ()
-    if isinstance(rule, (ParenthesisRule, IterationRule)):
-        return (rule.child,)
-    return (rule.left_child, rule.right_child)
+_RULE_TYPES = (TerminalPairRule, ParenthesisRule, IterationRule, BranchRule)
 
 
-def _rule_terminals(rule: Rule) -> tuple[int, ...]:
+def _require_index(name: str, value: int) -> None:
+    if type(value) is not int:
+        raise TypeError(f"{name} must use int")
+    if value < 0:
+        raise ValueError(f"{name} must be nonnegative")
+
+
+def _rule_parts(rule: Rule) -> tuple[tuple[int, ...], tuple[int, ...]]:
     if isinstance(rule, TerminalPairRule):
-        return (rule.left_terminal, rule.right_terminal)
+        return (), (rule.left_terminal, rule.right_terminal)
     if isinstance(rule, ParenthesisRule):
-        return (rule.left_terminal, rule.right_terminal)
+        return (rule.child,), (rule.left_terminal, rule.right_terminal)
     if isinstance(rule, IterationRule):
-        return (rule.terminal,)
-    return ()
+        if type(rule.terminal_first) is not bool:
+            raise TypeError("terminal_first must use bool")
+        return (rule.child,), (rule.terminal,)
+    return (rule.left_child, rule.right_child), ()
