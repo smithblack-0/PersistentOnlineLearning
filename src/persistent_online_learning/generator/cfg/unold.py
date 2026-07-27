@@ -44,6 +44,8 @@ def _nonterminal_slots(family: RuleFamily) -> int:
 
 @dataclass(slots=True)
 class _Construction:
+    """Build one grammar while preserving productive and connection invariants."""
+
     specification: UnoldCFGSpecification
     terminals: list[Terminal] = field(default_factory=list)
     nonterminals: list[Nonterminal] = field(default_factory=list)
@@ -135,6 +137,8 @@ class _Construction:
     def _can_create_plain_lhs(self) -> bool:
         if len(self.nonterminals) >= self.specification.max_nonterminals:
             return False
+        # Every distinct terminal-only lhs is a separate productive component.
+        # Leave at least one future rhs slot for every component except the root.
         available_connection_slots = (
             self.specification.parenthesis_with_nonterminal
             + self.specification.iteration_rules
@@ -157,6 +161,8 @@ class _Construction:
                 * (other_count - int(other_family is family))
                 for other_family, other_count in remaining.items()
             )
+            # Attach enough component roots now that all remaining hanging roots
+            # can still fit into later nonterminal rhs positions.
             required_hanging = max(0, len(self.hanging) - capacity_after)
             if required_hanging <= slots:
                 legal.append((family, required_hanging))
@@ -174,6 +180,8 @@ class _Construction:
             if candidate not in self.production_set:
                 self._commit_nonterminal_candidate(candidate)
                 return
+        # Saturated rule spaces can make rejection sampling arbitrarily slow.
+        # Exhaustively locate a remaining legal rule after the ordinary random path.
         candidate = self._find_nonterminal_candidate(family, required_hanging)
         if candidate is None:
             raise RuntimeError(f"no unique {family.value} rule remains")
@@ -187,6 +195,9 @@ class _Construction:
         if self.current_root is None:
             raise RuntimeError("nonterminal-rule phase has no connected root")
         slots = _nonterminal_slots(family)
+        # Existing lhs symbols come from the connected component. Hanging symbols
+        # remain component roots to be attached on a rhs, so each forced placement
+        # genuinely reduces the number of disconnected roots still outstanding.
         connected = sorted(self.connected, key=lambda symbol: symbol.index)
         can_create_lhs = (
             len(self.nonterminals) < self.specification.max_nonterminals
