@@ -8,13 +8,27 @@ and storage remain outside this package.
 
 from .base import TokenGenerator, build_generator, register_generator
 from .flavors import SimpleEpsilonMachine
+from .grammar import (
+    BranchRule,
+    Grammar,
+    IterationRule,
+    ParenthesisRule,
+    Rule,
+    TerminalPairRule,
+)
 from .primitives import GenerativeDecoder, HashReduction, StateCore
 
 __all__ = [
+    "BranchRule",
     "GenerativeDecoder",
+    "Grammar",
     "HashReduction",
+    "IterationRule",
+    "ParenthesisRule",
+    "Rule",
     "SimpleEpsilonMachine",
     "StateCore",
+    "TerminalPairRule",
     "TokenGenerator",
     "build_generator",
     "register_generator",
