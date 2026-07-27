@@ -94,7 +94,7 @@ Flavor = tuple[
 
 _FLAVORS: tuple[Flavor, ...] = (
     ("delta_net", _delta_config, DeltaNetForCausalLM),
-    ("gated_delta_net", _gated_delta_config, GatedDeltaNetForCausalLM),
+    ("gated_deltanet", _gated_delta_config, GatedDeltaNetForCausalLM),
 )
 
 
