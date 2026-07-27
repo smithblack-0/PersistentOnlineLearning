@@ -1,109 +1,110 @@
-# Generator Design Notes
+# Synthetic language generator design
 
-## Design problem
+Status: current working design. Only the exact random CFG construction described
+below is implemented.
 
-The generator must expose learnable rules over medium and long horizons without requiring an unidentifiably large hidden parameter set. It must also emit tokens in a normal-sized vocabulary rather than a tiny symbolic alphabet.
+## Purpose
 
-A useful first generator should provide:
+The training distribution should repeatedly present the model with a newly
+sampled language so ordinary weights learn an online language-acquisition
+procedure while recurrent state learns the current language. The eventual
+language generator combines recursive grammar with hidden evolving context.
 
-- compact hidden rules;
-- long temporal reach;
-- enough stochasticity that prediction is not trivial;
-- enough structure that observing more of the stream improves prediction;
-- a sharp enough output distribution that rules are visible;
-- many independently resampled process instances.
+The intended runtime process is:
 
-## Current leading direction
+1. maintain a LIFO derivation stack;
+2. choose a production using probabilities conditioned on the current state of
+   an epsilon machine;
+3. leave the epsilon state unchanged during nonterminal expansion;
+4. advance the epsilon state only after a terminal is emitted; and
+5. regenerate grammar, probability tables, epsilon transitions, and lexical
+   realization for a new training language.
 
-The current candidate combines a hashed, factorized controller with a sparse recent-token filter.
+The grammar topology and its later probability system are separate artifacts.
 
-### 1. Distributed token hashes
+## Current implemented unit: random CFG topology
 
-Each vocabulary token receives several independent random hash values:
+The first unit constructs an ordinary context-free grammar using the method in
+Unold, Kaczmarek, and Culer, *Iterative method of generating artificial
+context-free grammars*: <https://arxiv.org/abs/1911.05801>.
 
-```text
-word -> [hash_1, hash_2, ..., hash_N]
-```
+It preserves the paper's four rule families, productive-first ordering,
+hanging-symbol connection requirement, unique-rule requirement, and final use
+of the most recently created nonterminal as the start symbol.
 
-Each hash value lies in a much smaller bin space. Collisions are deliberate. A single channel therefore treats many technically different tokens as members of the same functional class, while the full collection of hash values preserves distinctions between them.
+The exact constructor input contains:
 
-The collision rate is a design parameter. It controls how many vocabulary items share one coarse functional property.
+- parenthesis rules without a nonterminal;
+- parenthesis rules with a nonterminal;
+- iteration rules;
+- branch rules;
+- a maximum terminal count; and
+- a maximum nonterminal count.
 
-### 2. Factorized controller state
+The constructor owns neither ranges nor curriculum policy. A later configuration
+resolver may sample a feasible exact request without changing this contract.
 
-Each hash channel owns a small categorical hidden state. When a token is emitted, its hash value in each channel selects that channel's next transition.
+### Random choices left open by the paper
 
-Conceptually:
+The paper gives construction invariants rather than complete pseudocode. The
+baseline implementation therefore makes the remaining choices explicitly:
 
-```text
-for each channel:
-    bin = token_hash[channel]
-    state[channel] = transition[channel][state[channel]][bin]
-```
+- after terminal-only rules, choose uniformly among legal remaining rule
+  families with quota left;
+- sample existing symbol identities together with one possible new-symbol
+  action when creation remains legal;
+- reserve forced hanging-symbol placements before sampling free right-hand-side
+  positions;
+- sample existing left-hand sides from the connected component, while hanging
+  symbols remain reserved as components to attach on a right-hand side; and
+- use the active PyTorch random stream.
 
-The complete controller is the tuple of all channel states. Its representation grows linearly with the number of channels, while the number of joint configurations grows combinatorially.
+Restricting existing left-hand sides to the connected component is the minimal
+constructive interpretation of the paper's hanging-symbol capacity guarantee.
+It prevents an apparent attachment from merely joining two still-disconnected
+components without reducing the number of roots that later rules must attach.
+This choice is intentionally local to the constructor and may be compared with
+a fuller disconnected-component policy if evidence makes that worthwhile.
 
-The controller's responsibility is long- and medium-term structure that cannot be recovered from only the most recent words.
+## Downstream lexical adapter
 
-### 3. Controller candidate filtering
+CFG terminals are lexical categories, not final words or stems. A later lexical
+adapter will map those categories onto a configured vocabulary. Its concrete
+configuration should be added only when that unit is implemented, but it must be
+able to support:
 
-The controller maps its current state back into broad vocabulary classes. Hash collisions intentionally leave a candidate pool rather than identifying one exact token.
+- many vocabulary elements per category;
+- overlap between categories;
+- coverage of the complete vocabulary; and
+- independently regenerated mappings for new synthetic languages.
 
-The controller should be understood as a filter:
+## Downstream state-conditioned PCFG
 
-```text
-full vocabulary -> controller-compatible candidate subset
-```
+A later unit will assign a production distribution for each pair of epsilon state
+and expandable nonterminal. Grammar expansion reads the distribution for the
+current state, while only terminal emission advances the epsilon machine.
+Probabilities and epsilon transitions must not be folded into the CFG
+constructor.
 
-It does not need to resolve all local grammatical or collocational ambiguity.
+## Curriculum consequence
 
-### 4. Sparse recent-token filtering
+More hidden states require more evidence from one language before the process is
+identifiable. Curriculum complexity therefore includes both structural
+complexity and the number of tokens supplied from each generated language. Long
+training episodes may eventually approach dataset-scale lengths.
 
-A sparse bigram, trigram, or similarly local transition system applies a second filter based on recent output history:
+## Displaced initial direction
 
-```text
-controller candidates -> locally valid candidates
-```
+The earlier hashed, factorized controller with sparse local filtering remains a
+possible comparison generator. It is no longer the leading synthetic-language
+construction because the state-conditioned CFG gives a more direct proxy for
+online grammar and hidden-context acquisition.
 
-This layer may serve as a first proxy for both shallow grammar and collocation. It should remove locally invalid words rather than replace the controller's long-horizon role.
+## Next focused units
 
-The final token is sampled from the surviving set or from simple weights over that set.
-
-## Why this direction is currently strongest
-
-- It works directly with a normal vocabulary size.
-- Its hidden rule count can remain comparatively small.
-- Hash collisions create controlled redundancy and partial functional equivalence.
-- Factorized state provides more history bandwidth than one small flat hidden state.
-- The sparse local system supplies surface regularity without requiring a full handcrafted grammar.
-- Every decision can be inspected and measured.
-
-## Important unresolved details
-
-### Output construction
-
-The exact mapping from controller state to candidate words is not settled. It must avoid both extremes:
-
-- smoothing the output across so many words that the controller's rules become invisible;
-- becoming effectively one-to-one and eliminating the intended redundancy.
-
-### Filter overlap
-
-If the controller candidate set and local transition set are independently random, their intersection may frequently be empty. Their construction likely needs shared hash structure or another deliberate correlation.
-
-### Controller necessity
-
-The local filter may become surprisingly capable. The controller must continue to earn its complexity by creating dependencies that the local system cannot solve.
-
-### Process diversity
-
-Resampling transition probabilities alone may not create enough distinct rule systems. Resampling controller topology, selected transition tables, local connectivity, or slower latent regimes may be needed.
-
-## Alternative generator families retained for comparison
-
-- A very small randomly initialized or statistically reinitialized neural language model.
-- A continuous logit-state or state-space generator with token-driven updates.
-- Unifilar hidden Markov models or epsilon-machine-inspired generators.
-- Hierarchical or chaotic deterministic systems with compact parameterizations.
-
-These remain useful comparison families. They should not be merged into the first generator unless the simpler controller design exposes a specific deficiency.
+1. Add total-rule and range resolution around the exact CFG request after its
+   required configuration behavior is concrete.
+2. Build the lexical-category adapter.
+3. Assign ordinary production probabilities and implement LIFO derivation.
+4. Add epsilon-state-conditioned production tables and terminal-triggered state
+   transitions.
