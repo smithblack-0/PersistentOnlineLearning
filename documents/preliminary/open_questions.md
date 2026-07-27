@@ -11,38 +11,39 @@ These questions are intentionally unresolved. They should guide the next researc
 5. What training lengths are sufficient to teach behavior that extrapolates to much longer inference streams?
 6. How should the experiment detect gradient contraction or effective memory loss across repeatedly addressed directions?
 
-## Generator
+## Synthetic language construction
 
-1. What is the smallest exact definition of the hashed controller?
-2. How many hash channels, bins, and controller states produce useful collision rates for a normal vocabulary?
-3. How does controller state define its candidate set without smoothing the distribution into near-uniform noise?
-4. How should the sparse local filter share structure with the controller so their intersection remains nonempty?
-5. Can a sparse bigram or trigram graph provide enough grammar-like and collocational structure for the first experiment?
-6. Does the local system become powerful enough that the controller is unnecessary?
-7. Which generator parameters should be resampled per episode, and which encoding conventions should remain stable across training?
-8. How can process complexity be measured before investing in model training?
+1. Which exact and range controls are needed first around the literature CFG constructor?
+2. What distributions over rule families, symbol maxima, and grammar sizes produce useful rather than merely valid languages?
+3. Should a later choice policy compensate for the constructor's age bias, and what evidence would justify doing so?
+4. How should lexical-category sizes and overlap be sampled while guaranteeing complete vocabulary coverage?
+5. How should ordinary production probabilities be drawn so recursive grammars terminate often enough while retaining useful structural ambiguity?
+6. How different should state-conditioned production distributions be across epsilon states?
+7. What epsilon-machine transition families remain learnable as state count grows?
+8. Which properties should be resampled per language, and which encoding conventions should remain stable across training?
 
 ## Training
 
-1. What first task clearly requires online process identification rather than local memorization?
-2. Should each training example contain one long process, multiple process changes, or both?
-3. How should true rule changes be distinguished from stochastic exceptions?
-4. What curriculum, if any, is needed across controller complexity, local-filter sparsity, and episode length?
+1. What first curriculum tier clearly requires online grammar identification rather than only local token statistics?
+2. How many sentences or tokens from one generated language are needed at each grammar and epsilon-state complexity?
+3. Should multiple sentences begin from the same epsilon state to make early latent-state identification tractable?
+4. How should language changes and recurrent-state resets be represented in a batch?
 5. How can training prevent the model from relying only on the gated path or only on short-context cues?
 6. What is the cheapest experiment that can disprove the current generator or architecture direction?
 
 ## Evaluation
 
-1. Does prediction improve as more evidence from one fixed process is observed?
+1. Does prediction improve as more evidence from one fixed synthetic language is observed?
 2. Does performance depend on state carried from evidence outside the model's recent local context?
-3. Can the model retain several independent inferred rules without catastrophic interference?
-4. Can it revise one rule after a genuine change without globally erasing unrelated knowledge?
-5. Does the learned procedure transfer to held-out generator parameters and held-out generator families?
-6. What evidence would distinguish semantic or structural transfer from simple token-frequency adaptation in an unseen-language test?
+3. How do unigram, bigram, trigram, and four-gram online controls compare under the same stream?
+4. Can the model retain several independent inferred rules without catastrophic interference?
+5. Can it revise one rule after a genuine change without globally erasing unrelated knowledge?
+6. Does the learned procedure transfer to held-out grammar and epsilon-machine parameters?
+7. What evidence would distinguish structural transfer from simple token-frequency adaptation in a stemmed-English test?
 
 ## Repository and engineering
 
-1. Which FLA model classes provide the best reference for mixed recurrent-state handling?
-2. Can the custom model remain compatible with Hugging Face generation and checkpoint conventions without obscuring its state contracts?
+1. Which configuration fields become necessary as each generator unit is implemented, without prematurely finalizing a project-wide schema?
+2. Can the exact CFG constructor remain independently auditable as range selection and lexical realization are added around it?
 3. What minimal tests are required before any scientific run is trustworthy?
 4. What hardware and sequence lengths can support the initial experiment without designing around an unrealistic training regime?
