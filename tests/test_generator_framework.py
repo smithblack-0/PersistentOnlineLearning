@@ -142,8 +142,8 @@ def test_grammar_rejects_an_unproductive_cycle() -> None:
         )
 
 
-def test_rule_indices_reject_booleans_and_negative_values() -> None:
-    with pytest.raises(TypeError, match="left terminal must use int"):
-        TerminalPairRule(True, 1)
-    with pytest.raises(ValueError, match="left child must be nonnegative"):
-        BranchRule(-1, 0)
+def test_grammar_rejects_invalid_rule_indices() -> None:
+    with pytest.raises(TypeError, match="terminal category must use int"):
+        Grammar(root=0, nodes=((TerminalPairRule(True, 1),),))
+    with pytest.raises(ValueError, match="child must be nonnegative"):
+        Grammar(root=0, nodes=((BranchRule(-1, 0), TerminalPairRule(0, 1)),))
