@@ -98,7 +98,7 @@ def _create_plain_foundation(
     bucket_counts: dict[tuple[object, ...], int] = {}
 
     rules_per_lhs = [1] * initial_count
-    unassigned = config.grammar.plain_parenthesis_rules - initial_count
+    unassigned = config.grammar.terminal_pair_rules - initial_count
     capacity = terminal_count**2
     while unassigned:
         available = [
