@@ -123,8 +123,6 @@ def choose_construction_plan(
     choices might still recover the requested graph.
     """
 
-    if not isinstance(generator, torch.Generator):
-        raise TypeError("generator must be torch.Generator")
     plans = feasible_construction_plans(config)
     index = int(torch.randint(len(plans), (), generator=generator))
     return plans[index]
