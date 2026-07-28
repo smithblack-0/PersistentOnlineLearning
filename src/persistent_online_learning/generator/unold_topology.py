@@ -46,7 +46,6 @@ class _SyntaxState:
 
     nonterminals: list[Nonterminal]
     reachable: list[Nonterminal]
-    reachable_set: set[Nonterminal]
     hanging: list[Nonterminal]
     root: Nonterminal
     drafts: list[RuleDraft]
@@ -122,7 +121,6 @@ def _create_plain_foundation(
     return _SyntaxState(
         nonterminals=nonterminals,
         reachable=[root],
-        reachable_set={root},
         hanging=nonterminals[:-1],
         root=root,
         drafts=drafts,
@@ -335,7 +333,6 @@ def _commit_topology(
     if candidate.creates_lhs:
         state.nonterminals.append(draft.lhs)
         state.reachable.append(draft.lhs)
-        state.reachable_set.add(draft.lhs)
         state.root = draft.lhs
 
     connected = [child for child in draft.children if child in state.hanging]
@@ -345,9 +342,8 @@ def _commit_topology(
             node for node in state.hanging if node not in connected_set
         ]
         for node in connected:
-            if node not in state.reachable_set:
+            if node not in state.reachable:
                 state.reachable.append(node)
-                state.reachable_set.add(node)
 
     key = bucket_key(draft)
     state.bucket_counts[key] = state.bucket_counts.get(key, 0) + 1
