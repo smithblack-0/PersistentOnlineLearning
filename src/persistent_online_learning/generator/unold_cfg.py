@@ -1,13 +1,13 @@
-"""Generate fixed CFGs with the productive-first method of Unold et al.
+"""Construct fixed lexicalized CFGs with the productive-first Unold method.
 
-The constructor creates the paper's syntax over abstract terminal categories,
-then assigns each terminal its concrete vocabulary realizations. Rule quotas,
-hanging components, random choices, and incomplete nodes are transient
-construction state and do not survive in the returned CFG.
+All graph-wide reasoning lives in this module. The returned objects are passive,
+sealed runtime data: the syntax graph, the vocabulary, and the mapping between
+abstract terminal nodes and concrete token IDs.
 """
 
 from __future__ import annotations
 
+from collections import deque
 from dataclasses import dataclass
 from enum import Enum, auto
 from itertools import product
@@ -15,7 +15,17 @@ from typing import Iterable
 
 import torch
 
-from .grammar import Alternative, CFG, Nonterminal, Terminal
+from .grammar import (
+    CFG,
+    GrammarSymbol,
+    LexicalizedCFG,
+    Lexicon,
+    LexiconEntry,
+    Nonterminal,
+    Production,
+    Terminal,
+    Vocabulary,
+)
 
 _MAX_RANDOM_ATTEMPTS = 512
 
@@ -31,13 +41,7 @@ def _require_count(name: str, value: int, *, positive: bool = False) -> None:
 
 @dataclass(frozen=True, slots=True)
 class LexiconParameters:
-    """Exact lexical coverage requested for the generated CFG.
-
-    ``category_count`` abstract terminal categories are created. Every category
-    receives exactly ``tokens_per_category`` distinct vocabulary IDs, every ID
-    in ``range(vocabulary_size)`` is used by at least one category, and remaining
-    category slots are allowed to overlap across categories.
-    """
+    """Exact lexical coverage requested for the generated language."""
 
     category_count: int
     vocabulary_size: int
@@ -62,13 +66,7 @@ class LexiconParameters:
 
 @dataclass(frozen=True, slots=True)
 class UnoldCFGParameters:
-    """One exact request for a fixed lexicalized CFG.
-
-    The four syntax-rule counts are exact. ``max_nonterminals`` is the paper's
-    maximum for syntactic nonterminals. The terminal-symbol parameter is supplied
-    by ``lexicon.category_count`` and is exact rather than merely a maximum,
-    because every configured terminal category is required to occur in the CFG.
-    """
+    """One exact request for a fixed lexicalized CFG."""
 
     terminal_pair_rules: int
     parenthesis_rules: int
@@ -128,12 +126,12 @@ class _Family(Enum):
 @dataclass(frozen=True, slots=True)
 class _Candidate:
     lhs: Nonterminal
-    rhs: Alternative
+    rhs: Production
     creates_lhs: bool
 
 
 class _Construction:
-    """Transient state that constructs one syntax graph and its terminal categories."""
+    """Transient state that builds, verifies, and seals one language."""
 
     def __init__(self, parameters: UnoldCFGParameters) -> None:
         self.parameters = parameters
@@ -141,7 +139,7 @@ class _Construction:
         self.terminals: list[Terminal] = []
         self.current_root: Nonterminal | None = None
 
-    def build(self) -> CFG:
+    def build(self) -> LexicalizedCFG:
         self._add_terminal_pair_rules()
         assert self.nodes
         self.current_root = self.nodes[-1]
@@ -170,16 +168,14 @@ class _Construction:
         if len(self.terminals) != self.parameters.lexicon.category_count:
             raise RuntimeError("CFG construction did not use every terminal category")
 
-        _assign_vocabulary(self.terminals, self.parameters.lexicon)
-        grammar = CFG(
-            self.current_root,
+        entries = _assign_vocabulary(self.terminals, self.parameters.lexicon)
+        return _finalize_language(
+            start=self.current_root,
+            declared_nonterminals=self.nodes,
+            declared_terminals=self.terminals,
+            entries=entries,
             vocabulary_size=self.parameters.lexicon.vocabulary_size,
         )
-        if set(grammar.nonterminals) != set(self.nodes):
-            raise RuntimeError("CFG construction left an unconnected syntactic node")
-        if set(grammar.terminals) != set(self.terminals):
-            raise RuntimeError("CFG construction left an unconnected terminal category")
-        return grammar
 
     def _add_terminal_pair_rules(self) -> None:
         for completed in range(self.parameters.terminal_pair_rules):
@@ -316,7 +312,7 @@ class _Construction:
             return None
 
         if family is _Family.BRANCH:
-            rhs: Alternative = tuple(children)
+            rhs: Production = tuple(children)
         elif family is _Family.PARENTHESIS:
             terminals = self._sample_terminals(2, required_new=required_new)
             rhs = (terminals[0], children[0], terminals[1])
@@ -340,15 +336,15 @@ class _Construction:
                 if family is _Family.BRANCH:
                     yield _Candidate(lhs, tuple(children), creates_lhs)
                 elif family is _Family.PARENTHESIS:
-                    for categories in self._terminal_options(2):
+                    for terminals in self._terminal_options(2):
                         yield _Candidate(
                             lhs,
-                            (categories[0], children[0], categories[1]),
+                            (terminals[0], children[0], terminals[1]),
                             creates_lhs,
                         )
                 else:
-                    for categories in self._terminal_options(1):
-                        terminal = categories[0]
+                    for terminals in self._terminal_options(1):
+                        terminal = terminals[0]
                         yield _Candidate(lhs, (terminal, children[0]), creates_lhs)
                         yield _Candidate(lhs, (children[0], terminal), creates_lhs)
 
@@ -407,15 +403,10 @@ class _Construction:
         return True
 
     def _terminal_count_after(self, candidate: _Candidate) -> int:
-        highest = max(
-            (
-                symbol.category
-                for symbol in candidate.rhs
-                if isinstance(symbol, Terminal)
-            ),
-            default=-1,
-        )
-        return max(len(self.terminals), highest + 1)
+        candidate_terminals = {
+            symbol for symbol in candidate.rhs if isinstance(symbol, Terminal)
+        }
+        return len(set(self.terminals) | candidate_terminals)
 
     def _hanging_component_count(
         self,
@@ -432,9 +423,7 @@ class _Construction:
                     if isinstance(symbol, Nonterminal)
                 )
         adjacency[candidate.lhs].extend(
-            symbol
-            for symbol in candidate.rhs
-            if isinstance(symbol, Nonterminal)
+            symbol for symbol in candidate.rhs if isinstance(symbol, Nonterminal)
         )
 
         reachable = _reachable(root, adjacency)
@@ -459,21 +448,13 @@ class _Construction:
                     incoming[target] = True
         return sum(not value for value in incoming)
 
-    def _sample_lhs(
-        self,
-        *,
-        plain: bool,
-    ) -> tuple[Nonterminal | None, bool]:
+    def _sample_lhs(self, *, plain: bool) -> tuple[Nonterminal | None, bool]:
         options = self._lhs_options(plain=plain)
         if not options:
             return None, False
         return options[_random_index(len(options))]
 
-    def _lhs_options(
-        self,
-        *,
-        plain: bool,
-    ) -> list[tuple[Nonterminal, bool]]:
+    def _lhs_options(self, *, plain: bool) -> list[tuple[Nonterminal, bool]]:
         options = [(node, False) for node in self.nodes]
         can_create = len(self.nodes) < self.parameters.max_nonterminals
         if plain:
@@ -494,9 +475,7 @@ class _Construction:
         required_new: int = 0,
     ) -> tuple[Terminal, ...]:
         if required_new > count:
-            raise RuntimeError(
-                "remaining terminal positions cannot satisfy the request"
-            )
+            raise RuntimeError("remaining terminal positions cannot satisfy the request")
         available = self.terminals.copy()
         initial_count = len(available)
         result: list[Terminal] = []
@@ -512,7 +491,7 @@ class _Construction:
             else:
                 choice = _random_index(len(available) + int(can_create))
             if choice == len(available):
-                terminal = Terminal(len(available))
+                terminal = Terminal(f"T{len(available)}")
                 available.append(terminal)
                 result.append(terminal)
             else:
@@ -532,7 +511,7 @@ class _Construction:
             for terminal in available:
                 extend(prefix + (terminal,), available)
             if len(available) < self.parameters.lexicon.category_count:
-                terminal = Terminal(len(available))
+                terminal = Terminal(f"T{len(available)}")
                 extend(prefix + (terminal,), available + (terminal,))
 
         extend((), tuple(self.terminals))
@@ -544,54 +523,223 @@ class _Construction:
             self.current_root = candidate.lhs
         candidate.lhs.add_alternative(*candidate.rhs)
 
-        candidate_terminals = {
-            symbol.category: symbol
-            for symbol in candidate.rhs
-            if isinstance(symbol, Terminal)
-        }
-        highest = max(candidate_terminals, default=-1)
-        while len(self.terminals) <= highest:
-            terminal = len(self.terminals)
-            self.terminals.append(
-                candidate_terminals.get(terminal, Terminal(terminal))
-            )
+        for symbol in candidate.rhs:
+            if isinstance(symbol, Terminal) and symbol not in self.terminals:
+                self.terminals.append(symbol)
 
 
 def _assign_vocabulary(
     terminals: list[Terminal],
     parameters: LexiconParameters,
-) -> None:
-    """Cover every vocabulary ID once, then fill remaining category slots."""
-
-    slot_count = len(terminals) * parameters.tokens_per_category
-    if slot_count < parameters.vocabulary_size:
-        raise RuntimeError(
-            "generated categories cannot cover the configured vocabulary"
-        )
+) -> tuple[LexiconEntry, ...]:
+    """Cover every token ID once, then fill each category independently."""
 
     assignments: list[list[int]] = [[] for _ in terminals]
     membership: list[set[int]] = [set() for _ in terminals]
     terminal_order = torch.randperm(len(terminals)).tolist()
     vocabulary_order = torch.randperm(parameters.vocabulary_size).tolist()
 
-    for position, token_index in enumerate(vocabulary_order):
+    for position, token_id in enumerate(vocabulary_order):
         terminal_index = terminal_order[position % len(terminals)]
-        assignments[terminal_index].append(token_index)
-        membership[terminal_index].add(token_index)
+        assignments[terminal_index].append(token_id)
+        membership[terminal_index].add(token_id)
 
-    for terminal_index, terminal in enumerate(terminals):
-        if len(assignments[terminal_index]) < parameters.tokens_per_category:
-            for token_index in torch.randperm(parameters.vocabulary_size).tolist():
-                if token_index in membership[terminal_index]:
-                    continue
-                assignments[terminal_index].append(token_index)
-                membership[terminal_index].add(token_index)
-                if (
-                    len(assignments[terminal_index])
-                    == parameters.tokens_per_category
-                ):
-                    break
-        terminal.set_vocabulary(tuple(assignments[terminal_index]))
+    for terminal_index in range(len(terminals)):
+        for token_id in torch.randperm(parameters.vocabulary_size).tolist():
+            if len(assignments[terminal_index]) == parameters.tokens_per_category:
+                break
+            if token_id in membership[terminal_index]:
+                continue
+            assignments[terminal_index].append(token_id)
+            membership[terminal_index].add(token_id)
+
+    return tuple(
+        LexiconEntry(terminal, tuple(assignments[index]))
+        for index, terminal in enumerate(terminals)
+    )
+
+
+def _finalize_language(
+    *,
+    start: Nonterminal,
+    declared_nonterminals: list[Nonterminal],
+    declared_terminals: list[Terminal],
+    entries: tuple[LexiconEntry, ...],
+    vocabulary_size: int,
+) -> LexicalizedCFG:
+    """Verify construction output, seal the nodes, and publish passive containers."""
+
+    _require_distinct_declared_nodes(declared_nonterminals, declared_terminals)
+    reachable_nonterminals, referenced_terminals = _walk_declared_graph(
+        start,
+        declared_nonterminals,
+        declared_terminals,
+    )
+    if set(reachable_nonterminals) != set(declared_nonterminals):
+        missing = next(
+            node for node in declared_nonterminals if node not in reachable_nonterminals
+        )
+        raise RuntimeError(f"constructed nonterminal {missing.name!r} is unreachable")
+    if referenced_terminals != set(declared_terminals):
+        missing = next(
+            terminal
+            for terminal in declared_terminals
+            if terminal not in referenced_terminals
+        )
+        raise RuntimeError(f"constructed terminal {missing.name!r} is unused")
+
+    _require_productive(reachable_nonterminals)
+    vocabulary = Vocabulary(vocabulary_size)
+    _require_complete_lexicon(declared_terminals, entries, vocabulary)
+
+    for node in (*declared_nonterminals, *declared_terminals):
+        node._seal()
+
+    return LexicalizedCFG(
+        grammar=CFG(
+            start=start,
+            nonterminals=tuple(declared_nonterminals),
+            terminals=tuple(declared_terminals),
+        ),
+        lexicon=Lexicon(vocabulary=vocabulary, entries=entries),
+    )
+
+
+def _require_distinct_declared_nodes(
+    nonterminals: list[Nonterminal],
+    terminals: list[Terminal],
+) -> None:
+    all_nodes: list[GrammarSymbol] = [*nonterminals, *terminals]
+    if len(set(all_nodes)) != len(all_nodes):
+        raise RuntimeError("construction declared the same node more than once")
+    names: set[str] = set()
+    for node in all_nodes:
+        if node.name in names:
+            raise RuntimeError(f"construction reused node name {node.name!r}")
+        names.add(node.name)
+
+
+def _walk_declared_graph(
+    start: Nonterminal,
+    declared_nonterminals: list[Nonterminal],
+    declared_terminals: list[Terminal],
+) -> tuple[list[Nonterminal], set[Terminal]]:
+    declared_nonterminal_set = set(declared_nonterminals)
+    declared_terminal_set = set(declared_terminals)
+    if start not in declared_nonterminal_set:
+        raise RuntimeError("CFG start is not one of the declared nonterminals")
+
+    ordered: list[Nonterminal] = []
+    seen: set[Nonterminal] = {start}
+    terminals: set[Terminal] = set()
+    pending: deque[Nonterminal] = deque([start])
+    while pending:
+        node = pending.popleft()
+        ordered.append(node)
+        if not node.alternatives:
+            raise RuntimeError(f"constructed nonterminal {node.name!r} has no productions")
+        for production in node.alternatives:
+            for symbol in production:
+                if isinstance(symbol, Terminal):
+                    if symbol not in declared_terminal_set:
+                        raise RuntimeError(
+                            f"production references undeclared terminal {symbol.name!r}"
+                        )
+                    terminals.add(symbol)
+                else:
+                    if symbol not in declared_nonterminal_set:
+                        raise RuntimeError(
+                            f"production references undeclared nonterminal {symbol.name!r}"
+                        )
+                    if symbol not in seen:
+                        seen.add(symbol)
+                        pending.append(symbol)
+    return ordered, terminals
+
+
+def _require_productive(nonterminals: list[Nonterminal]) -> None:
+    unresolved_by_production: dict[Nonterminal, list[int]] = {
+        node: [
+            sum(isinstance(symbol, Nonterminal) for symbol in production)
+            for production in node.alternatives
+        ]
+        for node in nonterminals
+    }
+    dependents: dict[Nonterminal, list[tuple[Nonterminal, int]]] = {
+        node: [] for node in nonterminals
+    }
+    productive: set[Nonterminal] = set()
+    pending: deque[Nonterminal] = deque()
+
+    for owner in nonterminals:
+        for production_index, production in enumerate(owner.alternatives):
+            children = [
+                symbol for symbol in production if isinstance(symbol, Nonterminal)
+            ]
+            if not children and owner not in productive:
+                productive.add(owner)
+                pending.append(owner)
+            for child in children:
+                dependents[child].append((owner, production_index))
+
+    while pending:
+        child = pending.popleft()
+        for owner, production_index in dependents[child]:
+            unresolved_by_production[owner][production_index] -= 1
+            if (
+                unresolved_by_production[owner][production_index] == 0
+                and owner not in productive
+            ):
+                productive.add(owner)
+                pending.append(owner)
+
+    if len(productive) != len(nonterminals):
+        missing = next(node for node in nonterminals if node not in productive)
+        raise RuntimeError(
+            f"constructed nonterminal {missing.name!r} has no finite terminal derivation"
+        )
+
+
+def _require_complete_lexicon(
+    terminals: list[Terminal],
+    entries: tuple[LexiconEntry, ...],
+    vocabulary: Vocabulary,
+) -> None:
+    if len(entries) != len(terminals):
+        raise RuntimeError("lexicon does not contain one entry per terminal")
+    entry_by_terminal: dict[Terminal, LexiconEntry] = {}
+    used_token_ids: set[int] = set()
+    for entry in entries:
+        if entry.terminal in entry_by_terminal:
+            raise RuntimeError(
+                f"lexicon contains duplicate entry for {entry.terminal.name!r}"
+            )
+        if entry.terminal not in terminals:
+            raise RuntimeError(
+                f"lexicon references undeclared terminal {entry.terminal.name!r}"
+            )
+        entry_by_terminal[entry.terminal] = entry
+        for token_id in entry.token_ids:
+            if token_id >= vocabulary.size:
+                raise RuntimeError(
+                    f"lexicon token ID {token_id} is outside vocabulary size "
+                    f"{vocabulary.size}"
+                )
+            used_token_ids.add(token_id)
+
+    missing_terminal = next(
+        (terminal for terminal in terminals if terminal not in entry_by_terminal),
+        None,
+    )
+    if missing_terminal is not None:
+        raise RuntimeError(
+            f"lexicon has no entry for terminal {missing_terminal.name!r}"
+        )
+
+    expected = set(range(vocabulary.size))
+    if used_token_ids != expected:
+        missing_token_id = min(expected - used_token_ids)
+        raise RuntimeError(f"lexicon does not use token ID {missing_token_id}")
 
 
 def _random_index(size: int) -> int:
@@ -600,9 +748,7 @@ def _random_index(size: int) -> int:
     return int(torch.randint(size, ()))
 
 
-def _random_order(
-    values: list[Nonterminal],
-) -> list[Nonterminal]:
+def _random_order(values: list[Nonterminal]) -> list[Nonterminal]:
     if len(values) < 2:
         return values.copy()
     order = torch.randperm(len(values)).tolist()
@@ -673,8 +819,8 @@ def _strongly_connected_components(
     return components
 
 
-def generate_unold_cfg(parameters: UnoldCFGParameters) -> CFG:
-    """Generate one fixed CFG from one exact syntax-and-lexicon request."""
+def generate_unold_cfg(parameters: UnoldCFGParameters) -> LexicalizedCFG:
+    """Generate one fixed lexicalized CFG from an exact feasible request."""
 
     if not isinstance(parameters, UnoldCFGParameters):
         raise TypeError("parameters must be UnoldCFGParameters")
