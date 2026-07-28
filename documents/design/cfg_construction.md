@@ -142,7 +142,7 @@ to the minimum node count.
 
 ### Phase 3: productive foundation
 
-Input: the selected plan and `plain_parenthesis_rules`.
+Input: the selected plan and `terminal_pair_rules`.
 
 Output: productive rule drafts of the form `A -> a b`, one or more per initial
 nonterminal.
