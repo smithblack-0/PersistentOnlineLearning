@@ -5,6 +5,7 @@ import torch
 
 from persistent_online_learning.generator import (
     CFG,
+    LexiconParameters,
     Nonterminal,
     SimpleEpsilonMachine,
     Terminal,
@@ -68,7 +69,10 @@ def test_default_generate_uses_repeated_transition() -> None:
 
 
 def _cfg_signature(grammar: CFG) -> tuple[object, ...]:
-    return tuple(
+    terminal_vocabulary = tuple(
+        (terminal.category, terminal.vocabulary) for terminal in grammar.terminals
+    )
+    rules = tuple(
         (
             node.name,
             tuple(
@@ -83,6 +87,7 @@ def _cfg_signature(grammar: CFG) -> tuple[object, ...]:
         )
         for node in grammar.nonterminals
     )
+    return terminal_vocabulary, rules
 
 
 def _generated_family_counts(grammar: CFG) -> tuple[int, int, int, int]:
@@ -117,9 +122,11 @@ def _generated_family_counts(grammar: CFG) -> tuple[int, int, int, int]:
     return terminal_pairs, parenthesis, iteration, branches
 
 
-def test_cfg_is_the_rooted_graph_owned_by_its_nonterminals() -> None:
+def test_cfg_centralizes_syntax_and_lexical_ownership() -> None:
     noun = Terminal(0)
+    noun.set_vocabulary((0, 2))
     verb = Terminal(1)
+    verb.set_vocabulary((1, 3))
     sentence = Nonterminal("sentence")
     phrase = Nonterminal("phrase")
 
@@ -127,75 +134,97 @@ def test_cfg_is_the_rooted_graph_owned_by_its_nonterminals() -> None:
     phrase.add_alternative(noun, noun)
     phrase.add_alternative(noun, phrase)
 
-    grammar = CFG(sentence)
+    grammar = CFG(sentence, vocabulary_size=4)
 
     assert grammar.start is sentence
     assert grammar.nonterminals == (sentence, phrase)
-    assert grammar.terminals == frozenset({noun, verb})
+    assert grammar.terminals == (noun, verb)
     assert grammar.rule_count == 3
-    assert sentence.alternatives == ((phrase, verb),)
+    assert noun.vocabulary == (0, 2)
     with pytest.raises(RuntimeError, match="sealed CFG"):
         phrase.add_alternative(noun)
+    with pytest.raises(RuntimeError, match="sealed CFG"):
+        noun.set_vocabulary((0,))
 
 
 def test_cfg_accepts_productive_recursion_and_rejects_unproductive_cycles() -> None:
     terminal = Terminal(0)
+    terminal.set_vocabulary((0,))
     left = Nonterminal("left")
     right = Nonterminal("right")
     left.add_alternative(right)
     right.add_alternative(left)
     right.add_alternative(terminal)
-    CFG(left)
+    CFG(left, vocabulary_size=1)
 
+    bad_terminal = Terminal(0)
+    bad_terminal.set_vocabulary((0,))
+    bad_root = Nonterminal("bad_root")
     bad_left = Nonterminal("bad_left")
     bad_right = Nonterminal("bad_right")
+    bad_root.add_alternative(bad_terminal)
+    bad_root.add_alternative(bad_left)
     bad_left.add_alternative(bad_right)
     bad_right.add_alternative(bad_left)
     with pytest.raises(ValueError, match="finite terminal derivation"):
-        CFG(bad_left)
+        CFG(bad_root, vocabulary_size=1)
 
 
-def test_nonterminal_centralizes_local_alternative_integrity() -> None:
-    node = Nonterminal("node")
+def test_terminal_centralizes_local_vocabulary_integrity() -> None:
     terminal = Terminal(0)
-    node.add_alternative(terminal)
-    with pytest.raises(ValueError, match="already owns"):
-        node.add_alternative(terminal)
-    with pytest.raises(ValueError, match="must not be empty"):
-        node.add_alternative()
+    with pytest.raises(ValueError, match="duplicate"):
+        terminal.set_vocabulary((1, 1))
+    terminal.set_vocabulary((0, 1))
+    with pytest.raises(RuntimeError, match="already has"):
+        terminal.set_vocabulary((2,))
 
 
-def test_cfg_rejects_duplicate_symbol_names() -> None:
+def test_cfg_requires_complete_vocabulary_coverage() -> None:
     terminal = Terminal(0)
-    root = Nonterminal("same")
-    child = Nonterminal("same")
-    root.add_alternative(child)
-    child.add_alternative(terminal)
-    with pytest.raises(ValueError, match="duplicate nonterminal name"):
-        CFG(root)
+    terminal.set_vocabulary((0, 2))
+    root = Nonterminal("root")
+    root.add_alternative(terminal)
+    with pytest.raises(ValueError, match="vocabulary index 1"):
+        CFG(root, vocabulary_size=3)
 
 
-def test_exact_unold_request_generates_the_requested_static_cfg() -> None:
+def test_exact_unold_request_generates_syntax_and_lexicon() -> None:
     parameters = UnoldCFGParameters(
         terminal_pair_rules=5,
         parenthesis_rules=4,
         iteration_rules=3,
         branch_rules=2,
-        max_terminals=5,
         max_nonterminals=8,
+        lexicon=LexiconParameters(
+            category_count=5,
+            vocabulary_size=10,
+            tokens_per_category=4,
+        ),
     )
     torch.manual_seed(12)
     grammar = generate_unold_cfg(parameters)
 
     assert _generated_family_counts(grammar) == (5, 4, 3, 2)
     assert grammar.rule_count == 14
-    assert len(grammar.terminals) <= parameters.max_terminals
-    assert len(grammar.nonterminals) <= parameters.max_nonterminals
-    assert all(node.alternatives for node in grammar.nonterminals)
+    assert len(grammar.terminals) == parameters.lexicon.category_count
+    assert all(
+        len(terminal.vocabulary) == parameters.lexicon.tokens_per_category
+        for terminal in grammar.terminals
+    )
+    assert set().union(
+        *(set(terminal.vocabulary) for terminal in grammar.terminals)
+    ) == set(range(parameters.lexicon.vocabulary_size))
 
 
 def test_unold_construction_is_deterministic_under_the_callers_torch_seed() -> None:
-    parameters = UnoldCFGParameters(4, 3, 2, 2, 4, 7)
+    parameters = UnoldCFGParameters(
+        4,
+        3,
+        2,
+        2,
+        7,
+        LexiconParameters(4, 12, 4),
+    )
     torch.manual_seed(91)
     left = generate_unold_cfg(parameters)
     torch.manual_seed(91)
@@ -206,11 +235,11 @@ def test_unold_construction_is_deterministic_under_the_callers_torch_seed() -> N
 @pytest.mark.parametrize(
     "parameters",
     [
-        UnoldCFGParameters(1, 0, 0, 0, 1, 1),
-        UnoldCFGParameters(4, 0, 0, 1, 2, 3),
-        UnoldCFGParameters(2, 3, 0, 0, 2, 3),
-        UnoldCFGParameters(2, 0, 5, 0, 2, 4),
-        UnoldCFGParameters(3, 2, 2, 2, 3, 5),
+        UnoldCFGParameters(1, 0, 0, 0, 1, LexiconParameters(1, 1, 1)),
+        UnoldCFGParameters(4, 0, 0, 1, 3, LexiconParameters(2, 3, 2)),
+        UnoldCFGParameters(2, 3, 0, 0, 3, LexiconParameters(2, 3, 2)),
+        UnoldCFGParameters(2, 0, 5, 0, 4, LexiconParameters(2, 3, 2)),
+        UnoldCFGParameters(3, 2, 2, 2, 5, LexiconParameters(3, 5, 2)),
     ],
 )
 def test_unold_constructor_survives_repeated_legal_random_choices(
@@ -226,20 +255,47 @@ def test_unold_constructor_survives_repeated_legal_random_choices(
         torch.manual_seed(seed)
         grammar = generate_unold_cfg(parameters)
         assert _generated_family_counts(grammar) == expected
+        assert len(grammar.terminals) == parameters.lexicon.category_count
 
 
-def test_unold_parameters_reject_infeasible_rule_counts() -> None:
-    with pytest.raises(ValueError, match="connect"):
-        UnoldCFGParameters(3, 0, 0, 0, 1, 3)
-    with pytest.raises(ValueError, match="branch rule count"):
-        UnoldCFGParameters(1, 0, 0, 9, 1, 2)
+def test_lexicon_parameters_enforce_coverage_capacity() -> None:
+    with pytest.raises(ValueError, match="enough slots"):
+        LexiconParameters(2, 5, 2)
+    with pytest.raises(ValueError, match="cannot exceed"):
+        LexiconParameters(2, 3, 4)
+    with pytest.raises(ValueError, match="terminal positions"):
+        UnoldCFGParameters(1, 0, 0, 0, 1, LexiconParameters(3, 3, 1))
+
+
+def test_representative_large_vocabulary_is_fully_used() -> None:
+    parameters = UnoldCFGParameters(
+        terminal_pair_rules=100,
+        parenthesis_rules=0,
+        iteration_rules=0,
+        branch_rules=0,
+        max_nonterminals=1,
+        lexicon=LexiconParameters(
+            category_count=200,
+            vocabulary_size=10_000,
+            tokens_per_category=200,
+        ),
+    )
+    torch.manual_seed(7)
+    grammar = generate_unold_cfg(parameters)
+
+    assert len(grammar.terminals) == 200
+    assert all(len(terminal.vocabulary) == 200 for terminal in grammar.terminals)
+    assert set().union(
+        *(set(terminal.vocabulary) for terminal in grammar.terminals)
+    ) == set(range(10_000))
 
 
 def test_large_static_cfg_validation_is_iterative() -> None:
     terminal = Terminal(0)
+    terminal.set_vocabulary((0,))
     nodes = [Nonterminal(f"N{index}") for index in range(2_000)]
     nodes[-1].add_alternative(terminal)
     for index in range(len(nodes) - 1):
         nodes[index].add_alternative(nodes[index + 1])
-    grammar = CFG(nodes[0])
+    grammar = CFG(nodes[0], vocabulary_size=1)
     assert len(grammar.nonterminals) == len(nodes)
