@@ -1,25 +1,24 @@
 """Tests for the common generator contract and factory registry.
 
-The repository CI invokes this historical test entrypoint explicitly.  CFG
-construction contracts remain implemented in ``cfg_generation_contracts`` and
-are imported here so source-tree and installed-wheel jobs execute them without
-mixing their responsibilities into this module.
+The repository CI still invokes this historical test entrypoint explicitly. CFG
+construction contracts are implemented separately in ``cfg_generation_contracts``
+and imported here only so the existing workflow executes them from both the source
+tree and installed wheel. The workflow itself is intentionally unchanged.
 """
 
 import pytest
 
 from cfg_generation_contracts import (
-    test_audit_accepts_productive_recursion_and_rejects_unproductive_cycles,
     test_cfg_is_a_passive_container_and_does_not_finalize_its_nodes,
-    test_failed_audit_does_not_seal_or_repair_construction_state,
     test_feasible_nonterminal_counts_remain_randomized_within_configured_limit,
-    test_generated_cfg_contains_exact_rule_counts_and_direct_terminal_vocabulary,
+    test_generated_cfg_satisfies_complete_independent_graph_contract,
     test_generation_is_deterministic_under_the_callers_torch_seed,
+    test_independent_productivity_oracle_accepts_recursion_and_rejects_dead_cycles,
     test_nonterminal_accepts_only_unique_node_productions_until_sealed,
-    test_productivity_audit_is_iterative_for_deep_graphs,
+    test_productivity_oracle_is_iterative_for_deep_graphs,
     test_representative_large_vocabulary_is_directly_and_completely_reachable,
-    test_small_feasible_matrix_constructs_without_runtime_rescue_failures,
-    test_spawn_config_separates_local_and_cross_product_feasibility,
+    test_small_feasible_matrix_is_independently_audited_across_random_seeds,
+    test_spawn_config_separates_local_and_cross_request_feasibility,
     test_terminal_vocabulary_builder_guarantees_coverage_and_allows_overlap,
     test_terminal_vocabulary_is_complete_and_locally_valid_at_construction,
     test_terminal_vocabularies_may_overlap_or_contain_identical_token_sets,
@@ -34,6 +33,8 @@ from persistent_online_learning.generator import (
 
 
 def _specification() -> dict[str, object]:
+    """Return the ordinary registry request shared by generator framework tests."""
+
     return {
         "type": "simple_epsilon",
         "vocab_size": 64,
