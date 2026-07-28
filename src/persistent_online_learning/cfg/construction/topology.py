@@ -118,15 +118,6 @@ def build_unold_topology(
     reserving enough terminal-label capacity for unique final productions.
     """
 
-    if not isinstance(grammar, GrammarConfig):
-        raise TypeError("grammar must be GrammarConfig")
-    if not isinstance(plan, ConstructionPlan):
-        raise TypeError("plan must be ConstructionPlan")
-    if type(terminal_count) is not int or terminal_count <= 0:
-        raise ValueError("terminal_count must be a positive integer")
-    if not isinstance(generator, torch.Generator):
-        raise TypeError("generator must be torch.Generator")
-
     state = _create_plain_foundation(grammar, plan, terminal_count, generator)
     _extend_productive_graph(state, grammar, terminal_count)
     return SyntaxTopology(
