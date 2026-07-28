@@ -1,8 +1,12 @@
 # Fixed CFG generation
 
-`generate_unold_cfg` creates one fixed context-free grammar. The returned `CFG`
-contains the generated syntax and the lexical realization of its abstract
-terminal categories. It contains no production probabilities or runtime state.
+`generate_unold_cfg` creates one fixed lexicalized context-free language. The
+returned `LexicalizedCFG` contains two passive runtime artifacts:
+
+- `language.grammar`: the sealed syntax graph;
+- `language.lexicon`: the concrete token IDs assigned to each abstract terminal.
+
+It contains no production probabilities or runtime generation state.
 
 ```python
 import torch
@@ -27,35 +31,44 @@ parameters = UnoldCFGParameters(
 )
 
 torch.manual_seed(7)
-grammar = generate_unold_cfg(parameters)
+language = generate_unold_cfg(parameters)
+
+start = language.grammar.start
+first_terminal = language.grammar.terminals[0]
+first_entry = next(
+    entry for entry in language.lexicon.entries if entry.terminal is first_terminal
+)
 ```
 
-The four rule counts describe the paper's syntax-rule families. The configured
-`category_count` replaces the paper's terminal-symbol maximum with an exact
-project requirement: every abstract terminal category must occur in the
-resulting CFG. `max_nonterminals` remains a maximum.
+Each `Nonterminal` owns its ordered production alternatives. A production is a
+tuple of `Terminal` and `Nonterminal` nodes, so recursion and shared subgraphs use
+ordinary object references. Nodes accept local construction changes until the
+constructor seals them. The finished `CFG` only stores the start node and the
+selected terminal and nonterminal nodes; it does not perform reachability,
+productivity, validation, or vocabulary work during string generation.
 
-Each `Terminal` owns exactly `tokens_per_category` distinct vocabulary indices.
-Across all terminal categories, every index from `0` through
-`vocabulary_size - 1` occurs at least once. Categories may overlap. The lexical
-request is feasible exactly when a category cannot request more unique entries
-than the vocabulary contains and the combined category slots can cover the
-vocabulary:
+Each `Terminal` is an abstract lexical category identified by a readable name such
+as `T0`. Its concrete realizations live in a separate `LexiconEntry`, not on the
+terminal node. Every entry owns exactly `tokens_per_category` distinct token IDs.
+Across all entries, every ID from `0` through `vocabulary_size - 1` occurs at least
+once. Entries may overlap.
+
+The lexical request is feasible when:
 
 ```text
 tokens_per_category <= vocabulary_size
 category_count * tokens_per_category >= vocabulary_size
 ```
 
-The constructor distributes the first use of every vocabulary index as evenly
-as possible across the terminal categories. It then fills each category's
-remaining slots by independently sampling indices not already present in that
-category. This guarantees complete vocabulary use without forbidding overlap or
-systematically giving some categories all of the initially unique vocabulary.
-
 The syntax must also contain enough terminal positions to use every configured
-category. Construction rejects requests that cannot satisfy this requirement or
-the paper's rule-capacity and hanging-component constraints.
+category. During construction, the Unold builder performs the paper-specific
+feasibility, connectivity, reachability, productivity, and vocabulary-coverage
+checks. Only after those checks pass does it seal the nodes and publish the passive
+`LexicalizedCFG`.
+
+The constructor distributes the first use of every vocabulary index as evenly as
+possible across terminal categories, then fills each category's remaining slots by
+independently sampling IDs not already present in that entry.
 
 The active PyTorch random stream owns all random choices. Seed it before calling
-`generate_unold_cfg` when the exact grammar and lexicon must be reproducible.
+`generate_unold_cfg` when the exact syntax and lexicon must be reproducible.
