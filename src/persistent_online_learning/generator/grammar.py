@@ -34,12 +34,8 @@ class Node:
         if self._sealed:
             raise RuntimeError(f"node {self.name!r} is sealed")
 
-    def seal(self) -> None:
-        """End construction for this node.
-
-        Subclasses may finalize their local storage before delegating here.
-        Graph-wide validation does not belong to this method.
-        """
+    def _seal(self) -> None:
+        """End construction for this node without performing graph-wide work."""
 
         self._sealed = True
 
@@ -86,10 +82,10 @@ class Nonterminal(Node):
 
         return tuple(self._alternatives)
 
-    def seal(self) -> None:
+    def _seal(self) -> None:
         if not self.sealed:
             self._alternatives = tuple(self._alternatives)
-            super().seal()
+            super()._seal()
 
     def __repr__(self) -> str:
         return f"Nonterminal({self.name!r})"
@@ -101,11 +97,7 @@ Production: TypeAlias = tuple[GrammarSymbol, ...]
 
 @dataclass(frozen=True, slots=True)
 class CFG:
-    """The finished syntax graph.
-
-    This object stores the nodes selected by the constructor. It does not discover,
-    validate, seal, or otherwise compute over them.
-    """
+    """The finished syntax graph selected by a construction algorithm."""
 
     start: Nonterminal
     nonterminals: tuple[Nonterminal, ...]
@@ -114,7 +106,7 @@ class CFG:
 
 @dataclass(frozen=True, slots=True)
 class Vocabulary:
-    """The concrete token-index space available to the lexical realization."""
+    """The concrete token-index space available to lexical realization."""
 
     size: int
 
@@ -145,7 +137,7 @@ class LexiconEntry:
 
 @dataclass(frozen=True, slots=True)
 class Lexicon:
-    """The fixed lexical realization attached to the grammar's terminal nodes."""
+    """The fixed lexical realization attached to grammar terminal nodes."""
 
     vocabulary: Vocabulary
     entries: tuple[LexiconEntry, ...]
