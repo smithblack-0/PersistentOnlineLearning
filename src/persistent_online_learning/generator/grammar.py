@@ -1,267 +1,159 @@
-"""Fixed context-free grammars with node-owned lexical realization.
+"""Passive data structures for a fixed lexicalized context-free grammar.
 
-A grammar is a rooted graph of nonterminals. Each nonterminal owns its ordered
-right-hand-side alternatives, and each abstract terminal category owns the
-concrete vocabulary indices that can realize it. Nodes are mutable only while a
-generator assembles the graph and lexicon. Creating ``CFG`` validates the whole
-reachable language structure and seals it.
+The syntax is a directed graph whose nodes are ordinary Python objects. Terminal
+nodes are leaves. Nonterminal nodes own ordered production alternatives and may
+reference any terminal or nonterminal node, including themselves. Construction
+algorithms are responsible for graph-wide properties such as reachability and
+productivity before they seal the nodes and publish these containers.
 """
 
 from __future__ import annotations
 
-from collections import deque
+from dataclasses import dataclass
 from typing import TypeAlias
 
 
-def _require_nonnegative_int(name: str, value: int) -> None:
-    if type(value) is not int:
-        raise TypeError(f"{name} must use int")
-    if value < 0:
-        raise ValueError(f"{name} must be nonnegative")
+class Node:
+    """One named graph node with a shared construction-to-runtime lifecycle."""
 
-
-def _require_positive_int(name: str, value: int) -> None:
-    _require_nonnegative_int(name, value)
-    if value == 0:
-        raise ValueError(f"{name} must be positive")
-
-
-class Terminal:
-    """One abstract terminal category and its concrete vocabulary realizations.
-
-    A generator creates the category while assembling syntax, then assigns its
-    complete vocabulary exactly once. Constructing the containing ``CFG`` seals
-    the category against later mutation.
-    """
-
-    __slots__ = ("category", "_vocabulary", "_sealed")
-
-    def __init__(self, category: int) -> None:
-        _require_nonnegative_int("terminal category", category)
-        self.category = category
-        self._vocabulary: tuple[int, ...] = ()
-        self._sealed = False
-
-    def set_vocabulary(self, vocabulary: tuple[int, ...]) -> None:
-        """Assign the distinct vocabulary indices that realize this category."""
-
-        if self._sealed:
-            raise RuntimeError(
-                f"terminal category {self.category} belongs to a sealed CFG"
-            )
-        if self._vocabulary:
-            raise RuntimeError(
-                f"terminal category {self.category} already has a vocabulary"
-            )
-        if type(vocabulary) is not tuple or not vocabulary:
-            raise TypeError("terminal vocabulary must be a nonempty tuple")
-        for index in vocabulary:
-            _require_nonnegative_int("vocabulary index", index)
-        if len(set(vocabulary)) != len(vocabulary):
-            raise ValueError("terminal vocabulary must not contain duplicate indices")
-        self._vocabulary = vocabulary
-
-    @property
-    def vocabulary(self) -> tuple[int, ...]:
-        """Concrete vocabulary indices assigned to this category."""
-
-        return self._vocabulary
-
-    def _seal(self) -> None:
-        self._sealed = True
-
-    def __repr__(self) -> str:
-        return f"Terminal({self.category})"
-
-
-class Nonterminal:
-    """One CFG nonterminal and the alternatives it can expand into.
-
-    Nodes are created before all graph edges are known so recursive grammars can
-    be assembled naturally. ``add_alternative`` is available only until the
-    containing ``CFG`` validates and seals the complete reachable graph.
-    """
-
-    __slots__ = ("name", "_alternatives", "_alternative_set", "_sealed")
+    __slots__ = ("name", "_sealed")
 
     def __init__(self, name: str) -> None:
         if type(name) is not str or not name:
-            raise TypeError("nonterminal name must be a nonempty string")
+            raise TypeError("node name must be a nonempty string")
         self.name = name
-        self._alternatives: list[Alternative] | tuple[Alternative, ...] = []
-        self._alternative_set: set[Alternative] | None = set()
         self._sealed = False
 
-    def add_alternative(self, *symbols: Symbol) -> None:
-        """Add one ordered right-hand-side alternative while assembling a CFG."""
+    @property
+    def sealed(self) -> bool:
+        """Whether construction has finished for this node."""
 
+        return self._sealed
+
+    def _require_open(self) -> None:
         if self._sealed:
-            raise RuntimeError(f"nonterminal {self.name!r} belongs to a sealed CFG")
+            raise RuntimeError(f"node {self.name!r} is sealed")
+
+    def seal(self) -> None:
+        """End construction for this node.
+
+        Subclasses may finalize their local storage before delegating here.
+        Graph-wide validation does not belong to this method.
+        """
+
+        self._sealed = True
+
+
+class Terminal(Node):
+    """One abstract terminal symbol in the grammar graph."""
+
+    __slots__ = ()
+
+    def __repr__(self) -> str:
+        return f"Terminal({self.name!r})"
+
+
+class Nonterminal(Node):
+    """One nonterminal symbol and its locally owned production alternatives."""
+
+    __slots__ = ("_alternatives",)
+
+    def __init__(self, name: str) -> None:
+        super().__init__(name)
+        self._alternatives: list[Production] | tuple[Production, ...] = []
+
+    def add_alternative(self, *symbols: GrammarSymbol) -> None:
+        """Add one nonempty production while this node is under construction."""
+
+        self._require_open()
         if not symbols:
-            raise ValueError("CFG alternatives must not be empty")
+            raise ValueError("a production alternative must not be empty")
         if not all(isinstance(symbol, (Terminal, Nonterminal)) for symbol in symbols):
             raise TypeError(
-                "CFG alternatives may contain only terminals and nonterminals"
+                "a production alternative may contain only Terminal or Nonterminal nodes"
             )
-        alternative = tuple(symbols)
+
+        production = tuple(symbols)
+        if production in self._alternatives:
+            raise ValueError(f"nonterminal {self.name!r} already owns that production")
+
         assert isinstance(self._alternatives, list)
-        assert self._alternative_set is not None
-        if alternative in self._alternative_set:
-            raise ValueError(f"nonterminal {self.name!r} already owns that alternative")
-        self._alternatives.append(alternative)
-        self._alternative_set.add(alternative)
+        self._alternatives.append(production)
 
     @property
-    def alternatives(self) -> tuple[Alternative, ...]:
-        """Return this nonterminal's alternatives in construction order."""
+    def alternatives(self) -> tuple[Production, ...]:
+        """Return the productions in construction order."""
 
         return tuple(self._alternatives)
 
-    def _seal(self) -> None:
-        if not self._sealed:
+    def seal(self) -> None:
+        if not self.sealed:
             self._alternatives = tuple(self._alternatives)
-            self._alternative_set = None
-            self._sealed = True
+            super().seal()
 
     def __repr__(self) -> str:
         return f"Nonterminal({self.name!r})"
 
 
-Symbol: TypeAlias = Terminal | Nonterminal
-Alternative: TypeAlias = tuple[Symbol, ...]
+GrammarSymbol: TypeAlias = Terminal | Nonterminal
+Production: TypeAlias = tuple[GrammarSymbol, ...]
 
 
+@dataclass(frozen=True, slots=True)
 class CFG:
-    """A complete fixed CFG over abstract categories and one concrete vocabulary.
+    """The finished syntax graph.
 
-    The grammar is exactly the graph reachable from ``start``. Every reachable
-    nonterminal must own a finite terminal derivation. Every reachable terminal
-    category must own a nonempty vocabulary, and their union must cover every
-    index in ``range(vocabulary_size)``. Categories may overlap.
+    This object stores the nodes selected by the constructor. It does not discover,
+    validate, seal, or otherwise compute over them.
     """
 
-    __slots__ = (
-        "start",
-        "nonterminals",
-        "terminals",
-        "vocabulary_size",
-        "rule_count",
-    )
+    start: Nonterminal
+    nonterminals: tuple[Nonterminal, ...]
+    terminals: tuple[Terminal, ...]
 
-    def __init__(self, start: Nonterminal, vocabulary_size: int) -> None:
-        if not isinstance(start, Nonterminal):
-            raise TypeError("CFG start must be a Nonterminal")
-        _require_positive_int("vocabulary_size", vocabulary_size)
 
-        nonterminals = self._reachable_nonterminals(start)
-        names: set[str] = set()
-        terminals_by_category: dict[int, Terminal] = {}
-        for node in nonterminals:
-            if node.name in names:
-                raise ValueError(f"duplicate nonterminal name {node.name!r}")
-            names.add(node.name)
-            if not node.alternatives:
-                raise ValueError(f"nonterminal {node.name!r} has no alternatives")
-            for alternative in node.alternatives:
-                for symbol in alternative:
-                    if not isinstance(symbol, Terminal):
-                        continue
-                    existing = terminals_by_category.get(symbol.category)
-                    if existing is not None and existing is not symbol:
-                        raise ValueError(
-                            f"duplicate terminal category {symbol.category}"
-                        )
-                    terminals_by_category[symbol.category] = symbol
+@dataclass(frozen=True, slots=True)
+class Vocabulary:
+    """The concrete token-index space available to the lexical realization."""
 
-        terminals = tuple(
-            terminals_by_category[category]
-            for category in sorted(terminals_by_category)
-        )
-        used_vocabulary: set[int] = set()
-        for terminal in terminals:
-            if not terminal.vocabulary:
-                raise ValueError(
-                    f"terminal category {terminal.category} has no vocabulary"
-                )
-            for index in terminal.vocabulary:
-                if index >= vocabulary_size:
-                    raise ValueError(
-                        f"vocabulary index {index} is outside configured size "
-                        f"{vocabulary_size}"
-                    )
-                used_vocabulary.add(index)
+    size: int
 
-        expected_vocabulary = set(range(vocabulary_size))
-        if used_vocabulary != expected_vocabulary:
-            missing = min(expected_vocabulary - used_vocabulary)
-            raise ValueError(f"vocabulary index {missing} is not used by the CFG")
+    def __post_init__(self) -> None:
+        if type(self.size) is not int:
+            raise TypeError("vocabulary size must use int")
+        if self.size <= 0:
+            raise ValueError("vocabulary size must be positive")
 
-        self._require_productive(nonterminals)
-        for node in nonterminals:
-            node._seal()
-        for terminal in terminals:
-            terminal._seal()
 
-        self.start = start
-        self.nonterminals = tuple(nonterminals)
-        self.terminals = terminals
-        self.vocabulary_size = vocabulary_size
-        self.rule_count = sum(len(node.alternatives) for node in nonterminals)
+@dataclass(frozen=True, slots=True)
+class LexiconEntry:
+    """The concrete token IDs that may realize one terminal node."""
 
-    @staticmethod
-    def _reachable_nonterminals(start: Nonterminal) -> list[Nonterminal]:
-        ordered: list[Nonterminal] = []
-        seen: set[Nonterminal] = {start}
-        pending: deque[Nonterminal] = deque([start])
-        while pending:
-            node = pending.popleft()
-            ordered.append(node)
-            for alternative in node.alternatives:
-                for symbol in alternative:
-                    if isinstance(symbol, Nonterminal) and symbol not in seen:
-                        seen.add(symbol)
-                        pending.append(symbol)
-        return ordered
+    terminal: Terminal
+    token_ids: tuple[int, ...]
 
-    @staticmethod
-    def _require_productive(nonterminals: list[Nonterminal]) -> None:
-        unresolved_by_alternative: dict[Nonterminal, list[int]] = {
-            node: [
-                sum(isinstance(symbol, Nonterminal) for symbol in alternative)
-                for alternative in node.alternatives
-            ]
-            for node in nonterminals
-        }
-        dependents: dict[Nonterminal, list[tuple[Nonterminal, int]]] = {
-            node: [] for node in nonterminals
-        }
-        productive: set[Nonterminal] = set()
-        pending: deque[Nonterminal] = deque()
+    def __post_init__(self) -> None:
+        if not isinstance(self.terminal, Terminal):
+            raise TypeError("lexicon entry terminal must be a Terminal")
+        if type(self.token_ids) is not tuple or not self.token_ids:
+            raise TypeError("lexicon token_ids must be a nonempty tuple")
+        if any(type(token_id) is not int or token_id < 0 for token_id in self.token_ids):
+            raise ValueError("lexicon token IDs must be nonnegative integers")
+        if len(set(self.token_ids)) != len(self.token_ids):
+            raise ValueError("a lexicon entry must not contain duplicate token IDs")
 
-        for owner in nonterminals:
-            for alternative_index, alternative in enumerate(owner.alternatives):
-                children = [
-                    symbol for symbol in alternative if isinstance(symbol, Nonterminal)
-                ]
-                if not children and owner not in productive:
-                    productive.add(owner)
-                    pending.append(owner)
-                for child in children:
-                    dependents[child].append((owner, alternative_index))
 
-        while pending:
-            child = pending.popleft()
-            for owner, alternative_index in dependents[child]:
-                unresolved_by_alternative[owner][alternative_index] -= 1
-                if (
-                    unresolved_by_alternative[owner][alternative_index] == 0
-                    and owner not in productive
-                ):
-                    productive.add(owner)
-                    pending.append(owner)
+@dataclass(frozen=True, slots=True)
+class Lexicon:
+    """The fixed lexical realization attached to the grammar's terminal nodes."""
 
-        if len(productive) != len(nonterminals):
-            missing = next(node for node in nonterminals if node not in productive)
-            raise ValueError(
-                f"nonterminal {missing.name!r} has no finite terminal derivation"
-            )
+    vocabulary: Vocabulary
+    entries: tuple[LexiconEntry, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class LexicalizedCFG:
+    """The fixed syntax graph and its concrete lexical realization."""
+
+    grammar: CFG
+    lexicon: Lexicon
