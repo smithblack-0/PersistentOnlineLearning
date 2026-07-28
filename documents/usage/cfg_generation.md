@@ -16,7 +16,7 @@ from persistent_online_learning.generator import (
 
 config = CFGSpawnConfig(
     grammar=GrammarConfig(
-        plain_parenthesis_rules=100,
+        terminal_pair_rules=100,
         parenthesis_rules=40,
         iteration_rules=20,
         branch_rules=20,
@@ -60,7 +60,7 @@ every terminal appears in at least one grammar production.
 *Iterative method of generating artificial context-free grammars*
 (arXiv:1911.05801):
 
-- plain parenthesis: `A -> a b`;
+- terminal pair: `A -> a b`;
 - parenthesis: `A -> a B b`;
 - iteration: `A -> a B` or `A -> B a`;
 - branch: `A -> B C`.
