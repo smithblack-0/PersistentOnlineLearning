@@ -47,9 +47,11 @@ tokens_per_category <= vocabulary_size
 category_count * tokens_per_category >= vocabulary_size
 ```
 
-The constructor first assigns every vocabulary index to one category slot, then
-fills the remaining slots from indices not already present in that category.
-This guarantees complete vocabulary use without forbidding overlap.
+The constructor distributes the first use of every vocabulary index as evenly
+as possible across the terminal categories. It then fills each category's
+remaining slots by independently sampling indices not already present in that
+category. This guarantees complete vocabulary use without forbidding overlap or
+systematically giving some categories all of the initially unique vocabulary.
 
 The syntax must also contain enough terminal positions to use every configured
 category. Construction rejects requests that cannot satisfy this requirement or
