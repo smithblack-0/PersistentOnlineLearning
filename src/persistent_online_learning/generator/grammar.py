@@ -91,6 +91,7 @@ class Nonterminal(Node):
         return f"Nonterminal({self.name!r})"
 
 
+GrammarSymbol: TypeAlias = Node
 Production: TypeAlias = tuple[Node, ...]
 
 
