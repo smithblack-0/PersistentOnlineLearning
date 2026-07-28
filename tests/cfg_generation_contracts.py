@@ -32,7 +32,7 @@ def _config(
 ) -> CFGSpawnConfig:
     return CFGSpawnConfig(
         grammar=GrammarConfig(
-            plain_parenthesis_rules=plain,
+            terminal_pair_rules=plain,
             parenthesis_rules=parenthesis,
             iteration_rules=iteration,
             branch_rules=branch,
@@ -236,7 +236,7 @@ def test_vocabulary_density_does_not_shift_syntax_randomness() -> None:
     """Concrete-token sampling does not alter syntax for the same terminal alphabet."""
 
     grammar_config = GrammarConfig(
-        plain_parenthesis_rules=5,
+        terminal_pair_rules=5,
         parenthesis_rules=4,
         iteration_rules=3,
         branch_rules=2,
