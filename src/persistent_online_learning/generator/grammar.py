@@ -41,7 +41,7 @@ class Node:
 
 
 class Terminal(Node):
-    """One abstract terminal symbol in the grammar graph."""
+    """One abstract terminal node in the grammar graph."""
 
     __slots__ = ()
 
@@ -50,7 +50,7 @@ class Terminal(Node):
 
 
 class Nonterminal(Node):
-    """One nonterminal symbol and its locally owned production alternatives."""
+    """One nonterminal node and its locally owned production alternatives."""
 
     __slots__ = ("_alternatives",)
 
@@ -58,18 +58,18 @@ class Nonterminal(Node):
         super().__init__(name)
         self._alternatives: list[Production] | tuple[Production, ...] = []
 
-    def add_alternative(self, *symbols: GrammarSymbol) -> None:
+    def add_alternative(self, *nodes: Node) -> None:
         """Add one nonempty production while this node is under construction."""
 
         self._require_open()
-        if not symbols:
+        if not nodes:
             raise ValueError("a production alternative must not be empty")
-        if not all(isinstance(symbol, (Terminal, Nonterminal)) for symbol in symbols):
+        if not all(isinstance(node, (Terminal, Nonterminal)) for node in nodes):
             raise TypeError(
                 "a production alternative may contain only Terminal or Nonterminal nodes"
             )
 
-        production = tuple(symbols)
+        production = tuple(nodes)
         if production in self._alternatives:
             raise ValueError(f"nonterminal {self.name!r} already owns that production")
 
@@ -91,8 +91,7 @@ class Nonterminal(Node):
         return f"Nonterminal({self.name!r})"
 
 
-GrammarSymbol: TypeAlias = Terminal | Nonterminal
-Production: TypeAlias = tuple[GrammarSymbol, ...]
+Production: TypeAlias = tuple[Node, ...]
 
 
 @dataclass(frozen=True, slots=True)
@@ -129,7 +128,9 @@ class LexiconEntry:
             raise TypeError("lexicon entry terminal must be a Terminal")
         if type(self.token_ids) is not tuple or not self.token_ids:
             raise TypeError("lexicon token_ids must be a nonempty tuple")
-        if any(type(token_id) is not int or token_id < 0 for token_id in self.token_ids):
+        if any(
+            type(token_id) is not int or token_id < 0 for token_id in self.token_ids
+        ):
             raise ValueError("lexicon token IDs must be nonnegative integers")
         if len(set(self.token_ids)) != len(self.token_ids):
             raise ValueError("a lexicon entry must not contain duplicate token IDs")
