@@ -574,30 +574,23 @@ def _assign_vocabulary(
     terminal_order = torch.randperm(len(terminals)).tolist()
     vocabulary_order = torch.randperm(parameters.vocabulary_size).tolist()
 
-    cursor = 0
-    for terminal_index in terminal_order:
-        remaining_vocabulary = parameters.vocabulary_size - cursor
-        if remaining_vocabulary == 0:
-            break
-        take = min(parameters.tokens_per_category, remaining_vocabulary)
-        covered = vocabulary_order[cursor : cursor + take]
-        assignments[terminal_index].extend(covered)
-        membership[terminal_index].update(covered)
-        cursor += take
+    for position, token_index in enumerate(vocabulary_order):
+        terminal_index = terminal_order[position % len(terminals)]
+        assignments[terminal_index].append(token_index)
+        membership[terminal_index].add(token_index)
 
-    starts = torch.randint(
-        parameters.vocabulary_size,
-        (len(terminals),),
-    ).tolist()
     for terminal_index, terminal in enumerate(terminals):
-        position = starts[terminal_index]
-        while len(assignments[terminal_index]) < parameters.tokens_per_category:
-            token_index = vocabulary_order[position % parameters.vocabulary_size]
-            position += 1
-            if token_index in membership[terminal_index]:
-                continue
-            assignments[terminal_index].append(token_index)
-            membership[terminal_index].add(token_index)
+        if len(assignments[terminal_index]) < parameters.tokens_per_category:
+            for token_index in torch.randperm(parameters.vocabulary_size).tolist():
+                if token_index in membership[terminal_index]:
+                    continue
+                assignments[terminal_index].append(token_index)
+                membership[terminal_index].add(token_index)
+                if (
+                    len(assignments[terminal_index])
+                    == parameters.tokens_per_category
+                ):
+                    break
         terminal.set_vocabulary(tuple(assignments[terminal_index]))
 
 
