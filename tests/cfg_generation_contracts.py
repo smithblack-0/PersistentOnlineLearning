@@ -1,4 +1,10 @@
-"""Contract tests for fixed vocabulary-bearing CFG construction."""
+"""Contract tests for fixed vocabulary-bearing CFG construction.
+
+The production constructor establishes graph invariants constructively and does not
+re-audit its own output. These tests therefore use an independent graph oracle from
+``cfg_assertions`` to carry the distrust burden across ordinary, matrix, and scale
+cases.
+"""
 
 from __future__ import annotations
 
@@ -7,17 +13,22 @@ import itertools
 import pytest
 import torch
 
-from persistent_online_learning.generator import (
+from cfg_assertions import (
+    assert_generated_cfg_contract,
+    assert_productive,
+)
+from persistent_online_learning.cfg import (
     CFG,
     CFGSpawnConfig,
     GrammarConfig,
     Nonterminal,
     TerminalVocabulary,
     TerminalVocabularyConfig,
-    build_terminal_vocabularies,
     generate_unold_cfg,
 )
-from persistent_online_learning.generator.cfg_audit import audit_constructed_cfg
+from persistent_online_learning.cfg.construction.terminal_vocabularies import (
+    build_terminal_vocabularies,
+)
 
 
 def _config(
@@ -30,6 +41,8 @@ def _config(
     vocabulary_size: int = 12,
     tokens_per_terminal: int = 4,
 ) -> CFGSpawnConfig:
+    """Build the compact exact request shared by focused construction tests."""
+
     return CFGSpawnConfig(
         grammar=GrammarConfig(
             terminal_pair_rules=plain,
@@ -46,34 +59,9 @@ def _config(
     )
 
 
-def _family_counts(grammar: CFG) -> tuple[int, int, int, int]:
-    plain = parenthesis = iteration = branch = 0
-    for node in grammar.nonterminals:
-        for production in node.productions:
-            nonterminal_positions = tuple(
-                isinstance(child, Nonterminal) for child in production
-            )
-            if len(production) == 2 and nonterminal_positions == (False, False):
-                plain += 1
-            elif len(production) == 3 and nonterminal_positions == (
-                False,
-                True,
-                False,
-            ):
-                parenthesis += 1
-            elif len(production) == 2 and nonterminal_positions in (
-                (False, True),
-                (True, False),
-            ):
-                iteration += 1
-            elif len(production) == 2 and nonterminal_positions == (True, True):
-                branch += 1
-            else:
-                raise AssertionError(f"unexpected production: {production!r}")
-    return plain, parenthesis, iteration, branch
-
-
 def _signature(grammar: CFG) -> tuple[object, ...]:
+    """Return all random construction choices in a deterministic comparable form."""
+
     return (
         tuple(
             (terminal.name, terminal.token_ids)
@@ -93,6 +81,8 @@ def _signature(grammar: CFG) -> tuple[object, ...]:
 
 
 def _syntax_signature(grammar: CFG) -> tuple[object, ...]:
+    """Return syntax choices while intentionally ignoring concrete token membership."""
+
     return tuple(
         (
             node.name,
@@ -106,7 +96,7 @@ def _syntax_signature(grammar: CFG) -> tuple[object, ...]:
 
 
 def test_terminal_vocabulary_is_complete_and_locally_valid_at_construction() -> None:
-    """A terminal owns an immutable nonempty set of distinct concrete token IDs."""
+    """A terminal owns its concrete choices immediately and rejects local invalidity."""
 
     terminal = TerminalVocabulary("word", (2, 4, 7))
     assert terminal.token_ids == (2, 4, 7)
@@ -117,24 +107,16 @@ def test_terminal_vocabulary_is_complete_and_locally_valid_at_construction() -> 
 
 
 def test_terminal_vocabularies_may_overlap_or_contain_identical_token_sets() -> None:
-    """Token membership is nonexclusive across independently named terminals."""
+    """Terminal membership is nonexclusive, including completely identical sets."""
 
     left = TerminalVocabulary("left", (0, 1, 2))
     right = TerminalVocabulary("right", (0, 1, 2))
-    root = Nonterminal("root")
-    root.add_production(left)
-    root.add_production(right)
-    audit_constructed_cfg(
-        start=root,
-        nonterminals=[root],
-        terminal_vocabularies=(left, right),
-        vocabulary_size=3,
-    )
     assert left.token_ids == right.token_ids
+    assert left is not right
 
 
 def test_nonterminal_accepts_only_unique_node_productions_until_sealed() -> None:
-    """Nonterminals enforce local production shape and reject later mutation."""
+    """Nonterminals protect local graph shape and reject mutation after publication."""
 
     terminal = TerminalVocabulary("word", (0,))
     node = Nonterminal("phrase")
@@ -151,7 +133,7 @@ def test_nonterminal_accepts_only_unique_node_productions_until_sealed() -> None
 
 
 def test_cfg_is_a_passive_container_and_does_not_finalize_its_nodes() -> None:
-    """Constructing CFG stores supplied graph objects without validation or sealing."""
+    """Constructing CFG stores a supplied graph without hidden validation or sealing."""
 
     terminal = TerminalVocabulary("word", (0,))
     root = Nonterminal("root")
@@ -162,9 +144,8 @@ def test_cfg_is_a_passive_container_and_does_not_finalize_its_nodes() -> None:
 
 
 def test_terminal_vocabulary_builder_guarantees_coverage_and_allows_overlap() -> None:
-    """Every concrete ID is used while terminal token sets remain nonexclusive."""
+    """The terminal-building phase covers every ID while permitting shared membership."""
 
-    torch.manual_seed(8)
     generator = torch.Generator().manual_seed(8)
     terminals = build_terminal_vocabularies(
         TerminalVocabularyConfig(
@@ -180,8 +161,8 @@ def test_terminal_vocabulary_builder_guarantees_coverage_and_allows_overlap() ->
     assert memberships > 7
 
 
-def test_spawn_config_separates_local_and_cross_product_feasibility() -> None:
-    """Independent configs validate locally; composition rejects incompatibility."""
+def test_spawn_config_separates_local_and_cross_request_feasibility() -> None:
+    """Local configs reject their own invalidity; composition rejects incompatibility."""
 
     with pytest.raises(ValueError, match="enough slots"):
         TerminalVocabularyConfig(
@@ -200,29 +181,17 @@ def test_spawn_config_separates_local_and_cross_product_feasibility() -> None:
         )
 
 
-def test_generated_cfg_contains_exact_rule_counts_and_direct_terminal_vocabulary(
-) -> None:
-    """The graph matches the request and reaches IDs through terminal nodes."""
+def test_generated_cfg_satisfies_complete_independent_graph_contract() -> None:
+    """A representative result satisfies every invariant without production re-audit."""
 
     config = _config(plain=5, parenthesis=4, iteration=3, branch=2, max_nonterminals=8)
     torch.manual_seed(12)
     grammar = generate_unold_cfg(config)
-    assert _family_counts(grammar) == (5, 4, 3, 2)
-    assert all(node.sealed for node in grammar.nonterminals)
-    assert all(terminal.sealed for terminal in grammar.terminal_vocabularies)
-    used_terminals = {
-        child
-        for node in grammar.nonterminals
-        for production in node.productions
-        for child in production
-        if isinstance(child, TerminalVocabulary)
-    }
-    assert used_terminals == set(grammar.terminal_vocabularies)
-    assert all(terminal.token_ids for terminal in used_terminals)
+    assert_generated_cfg_contract(grammar, config)
 
 
 def test_generation_is_deterministic_under_the_callers_torch_seed() -> None:
-    """The same config and active PyTorch seed reproduce syntax and vocabulary."""
+    """The same request and active PyTorch seed reproduce syntax and vocabulary."""
 
     config = _config()
     torch.manual_seed(91)
@@ -233,7 +202,7 @@ def test_generation_is_deterministic_under_the_callers_torch_seed() -> None:
 
 
 def test_vocabulary_density_does_not_shift_syntax_randomness() -> None:
-    """Concrete-token sampling does not alter syntax for the same terminal alphabet."""
+    """Concrete-token sampling cannot perturb syntax for one fixed terminal alphabet."""
 
     grammar_config = GrammarConfig(
         terminal_pair_rules=5,
@@ -257,9 +226,8 @@ def test_vocabulary_density_does_not_shift_syntax_randomness() -> None:
     assert _syntax_signature(sparse_grammar) == _syntax_signature(dense_grammar)
 
 
-def test_feasible_nonterminal_counts_remain_randomized_within_configured_limit(
-) -> None:
-    """The planner preserves variation instead of always choosing minimum nodes."""
+def test_feasible_nonterminal_counts_remain_randomized_within_configured_limit() -> None:
+    """Planning samples across feasible graph sizes instead of fixing the minimum."""
 
     config = _config(
         plain=5,
@@ -279,8 +247,8 @@ def test_feasible_nonterminal_counts_remain_randomized_within_configured_limit(
     assert max(counts) <= config.grammar.max_nonterminals
 
 
-def test_audit_accepts_productive_recursion_and_rejects_unproductive_cycles() -> None:
-    """Finalization distinguishes recursive productive graphs from dead cycles."""
+def test_independent_productivity_oracle_accepts_recursion_and_rejects_dead_cycles() -> None:
+    """The test oracle distinguishes productive recursion from unproductive cycles."""
 
     terminal = TerminalVocabulary("word", (0,))
     left = Nonterminal("left")
@@ -288,48 +256,18 @@ def test_audit_accepts_productive_recursion_and_rejects_unproductive_cycles() ->
     left.add_production(right)
     right.add_production(left)
     right.add_production(terminal)
-    audit_constructed_cfg(
-        start=left,
-        nonterminals=[left, right],
-        terminal_vocabularies=(terminal,),
-        vocabulary_size=1,
-    )
+    assert_productive((left, right))
 
     bad_left = Nonterminal("bad_left")
     bad_right = Nonterminal("bad_right")
     bad_left.add_production(bad_right)
     bad_right.add_production(bad_left)
-    with pytest.raises(RuntimeError, match="finite terminal derivation"):
-        audit_constructed_cfg(
-            start=bad_left,
-            nonterminals=[bad_left, bad_right],
-            terminal_vocabularies=(),
-            vocabulary_size=0,
-        )
+    with pytest.raises(AssertionError):
+        assert_productive((bad_left, bad_right))
 
 
-def test_failed_audit_does_not_seal_or_repair_construction_state() -> None:
-    """An invalid graph fails before publication and leaves construction state open."""
-
-    terminal = TerminalVocabulary("word", (0,))
-    root = Nonterminal("root")
-    unreachable = Nonterminal("unreachable")
-    root.add_production(terminal)
-    unreachable.add_production(terminal)
-    with pytest.raises(RuntimeError, match="unreachable"):
-        audit_constructed_cfg(
-            start=root,
-            nonterminals=[root, unreachable],
-            terminal_vocabularies=(terminal,),
-            vocabulary_size=1,
-        )
-    assert not root.sealed
-    assert not unreachable.sealed
-    assert not terminal.sealed
-
-
-def test_small_feasible_matrix_constructs_without_runtime_rescue_failures() -> None:
-    """A deterministic matrix of accepted requests succeeds across two random seeds."""
+def test_small_feasible_matrix_is_independently_audited_across_random_seeds() -> None:
+    """Every accepted small request satisfies the full graph oracle for two seeds."""
 
     accepted = 0
     for values in itertools.product(
@@ -366,16 +304,15 @@ def test_small_feasible_matrix_constructs_without_runtime_rescue_failures() -> N
         except ValueError:
             continue
         accepted += 1
-        expected = (plain, parenthesis, iteration, branch)
         for seed in (0, 1):
             torch.manual_seed(seed)
             grammar = generate_unold_cfg(config)
-            assert _family_counts(grammar) == expected
+            assert_generated_cfg_contract(grammar, config)
     assert accepted >= 100
 
 
 def test_representative_large_vocabulary_is_directly_and_completely_reachable() -> None:
-    """Two hundred terminal vocabularies collectively expose all 10,000 token IDs."""
+    """Two hundred terminal nodes directly expose and use all 10,000 concrete IDs."""
 
     config = _config(
         plain=100,
@@ -389,23 +326,16 @@ def test_representative_large_vocabulary_is_directly_and_completely_reachable() 
     )
     torch.manual_seed(7)
     grammar = generate_unold_cfg(config)
+    assert_generated_cfg_contract(grammar, config)
     assert len(grammar.terminal_vocabularies) == 200
-    assert set().union(
-        *(set(terminal.token_ids) for terminal in grammar.terminal_vocabularies)
-    ) == set(range(10_000))
 
 
-def test_productivity_audit_is_iterative_for_deep_graphs() -> None:
-    """A 2,000-node productive chain finalizes without recursive Python traversal."""
+def test_productivity_oracle_is_iterative_for_deep_graphs() -> None:
+    """The independent test oracle handles a 2,000-node chain without recursion."""
 
     terminal = TerminalVocabulary("word", (0,))
     nodes = [Nonterminal(f"N{index}") for index in range(2_000)]
     nodes[-1].add_production(terminal)
     for index in range(len(nodes) - 1):
         nodes[index].add_production(nodes[index + 1])
-    audit_constructed_cfg(
-        start=nodes[0],
-        nonterminals=nodes,
-        terminal_vocabularies=(terminal,),
-        vocabulary_size=1,
-    )
+    assert_productive(tuple(nodes))
