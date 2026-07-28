@@ -33,11 +33,6 @@ def build_terminal_vocabularies(
     publisher can close the shared graph lifecycle atomically.
     """
 
-    if not isinstance(config, TerminalVocabularyConfig):
-        raise TypeError("config must be TerminalVocabularyConfig")
-    if not isinstance(generator, torch.Generator):
-        raise TypeError("generator must be torch.Generator")
-
     assignments: list[list[int]] = [[] for _ in range(config.terminal_count)]
     membership: list[set[int]] = [set() for _ in range(config.terminal_count)]
     terminal_order = torch.randperm(config.terminal_count, generator=generator).tolist()
