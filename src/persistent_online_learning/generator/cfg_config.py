@@ -7,7 +7,7 @@ artificial context-free grammars," arXiv:1911.05801, 2019.
 
 Paper notation maps to this module as follows:
 
-``R_P^-`` -> ``plain_parenthesis_rules`` (A -> a b)
+``R_P^-`` -> ``terminal_pair_rules``      (A -> a b)
 ``R_P^+`` -> ``parenthesis_rules``       (A -> a B b)
 ``R_I``   -> ``iteration_rules``         (A -> a B or B a)
 ``R_B``   -> ``branch_rules``            (A -> B C)
@@ -36,16 +36,14 @@ def _require_count(name: str, value: int, *, positive: bool = False) -> None:
 class GrammarConfig:
     """Exact Unold rule counts and the nonterminal-symbol limit."""
 
-    plain_parenthesis_rules: int
+    terminal_pair_rules: int
     parenthesis_rules: int
     iteration_rules: int
     branch_rules: int
     max_nonterminals: int
 
     def __post_init__(self) -> None:
-        _require_count(
-            "plain_parenthesis_rules", self.plain_parenthesis_rules, positive=True
-        )
+        _require_count("terminal_pair_rules", self.terminal_pair_rules, positive=True)
         _require_count("parenthesis_rules", self.parenthesis_rules)
         _require_count("iteration_rules", self.iteration_rules)
         _require_count("branch_rules", self.branch_rules)
@@ -145,7 +143,7 @@ def _construction_plans(config: CFGSpawnConfig) -> tuple[_ConstructionPlan, ...]
     terminal_square = terminal_count**2
 
     terminal_positions = (
-        2 * grammar.plain_parenthesis_rules
+        2 * grammar.terminal_pair_rules
         + 2 * grammar.parenthesis_rules
         + grammar.iteration_rules
     )
@@ -155,14 +153,14 @@ def _construction_plans(config: CFGSpawnConfig) -> tuple[_ConstructionPlan, ...]
             "TerminalVocabulary"
         )
 
-    minimum_plain = _ceil_div(grammar.plain_parenthesis_rules, terminal_square)
+    minimum_plain = _ceil_div(grammar.terminal_pair_rules, terminal_square)
     connection_slots = (
         grammar.parenthesis_rules
         + grammar.iteration_rules
         + 2 * grammar.branch_rules
     )
     if minimum_plain > grammar.max_nonterminals:
-        raise ValueError("plain parenthesis rules exceed nonterminal capacity")
+        raise ValueError("terminal-pair rules exceed nonterminal capacity")
     if minimum_plain > connection_slots + 1:
         raise ValueError(
             "remaining rules cannot connect the initial productive nonterminals"
@@ -192,7 +190,7 @@ def _construction_plans(config: CFGSpawnConfig) -> tuple[_ConstructionPlan, ...]
         + grammar.iteration_rules
         + grammar.branch_rules
     )
-    total_rules = grammar.plain_parenthesis_rules + remaining_rules
+    total_rules = grammar.terminal_pair_rules + remaining_rules
     maximum_nonterminals = min(
         grammar.max_nonterminals,
         connection_slots + 1,
@@ -208,7 +206,7 @@ def _construction_plans(config: CFGSpawnConfig) -> tuple[_ConstructionPlan, ...]
             target_nonterminals - remaining_rules,
         )
         initial_max = min(
-            grammar.plain_parenthesis_rules,
+            grammar.terminal_pair_rules,
             target_nonterminals,
             connection_slots + 1,
         )
