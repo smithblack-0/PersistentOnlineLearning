@@ -10,7 +10,6 @@ from .base import TokenGenerator, build_generator, register_generator
 from .flavors import SimpleEpsilonMachine
 from .grammar import (
     CFG,
-    GrammarSymbol,
     LexicalizedCFG,
     Lexicon,
     LexiconEntry,
@@ -26,7 +25,6 @@ from .unold_cfg import LexiconParameters, UnoldCFGParameters, generate_unold_cfg
 __all__ = [
     "CFG",
     "GenerativeDecoder",
-    "GrammarSymbol",
     "HashReduction",
     "LexicalizedCFG",
     "Lexicon",
