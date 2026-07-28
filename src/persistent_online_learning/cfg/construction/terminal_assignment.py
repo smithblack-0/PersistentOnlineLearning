@@ -39,9 +39,6 @@ def publish_terminal_productions(
     resulting production remains unique.
     """
 
-    if not isinstance(generator, torch.Generator):
-        raise TypeError("generator must be torch.Generator")
-
     remaining_slots = sum(terminal_arity(draft.family) for draft in drafts)
     missing = _shuffle(list(terminals), generator)
     used_by_bucket: dict[
